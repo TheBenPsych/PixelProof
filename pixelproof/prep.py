@@ -62,6 +62,22 @@ def prepare(data: bytes, min_side: int = 0):
     return Prepared(w, h, ai_pixels(img), hn, hm)
 
 
+def same_photo_files(their_data: bytes, our_path: str, mirrored: bool):
+    """Runs inside a helper: the double-check (see matcher.double_check), opening both pictures here.
+    Returns the number of details that line up, None if the checker isn't installed, or "missing"."""
+    from .fingerprint import open_image, same_photo_score
+
+    try:
+        ours = open_image(our_path)[0]
+    except Exception:
+        return "missing"
+    try:
+        theirs = open_image(their_data)[0]
+    except Exception:
+        return 0
+    return same_photo_score(theirs, ours, mirrored)
+
+
 def helpers() -> int:
     return max(2, min(16, (os.cpu_count() or 4) - 2))
 

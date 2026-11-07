@@ -469,3 +469,19 @@ def test_missing_file_drops_only_unproven_lookalikes():
     assert double_check(img, row, False, "possible", "similar", {}) == (None, "")
     cat, note = double_check(img, row, False, "edited", "looks edited", {})
     assert cat == "edited" and "not found" in note
+
+
+def test_double_check_in_a_helper_gives_the_same_answer(tmp_path):
+    pytest.importorskip("cv2")
+    from pixelproof.matcher import double_check, double_check_in_helper
+
+    ours = _detailed(1)
+    ours.save(tmp_path / "ours.jpg", quality=92)
+    row = {"id": 1, "path": str(tmp_path / "ours.jpg")}
+    for theirs in (ours.crop((150, 100, 650, 433)), _detailed(2)):
+        buf = io.BytesIO()
+        theirs.save(buf, "JPEG", quality=90)
+        here = double_check(Image.open(io.BytesIO(buf.getvalue())).convert("RGB"), row, False, "possible", "x", {})
+        there = double_check_in_helper(buf.getvalue(), row, False, "possible", "x")
+        assert (here[0], there[0]) in (("edited", "edited"), (None, None))
+    assert double_check_in_helper(b"x", {"id": 2, "path": str(tmp_path / "gone.jpg")}, False, "possible", "x") == (None, "")

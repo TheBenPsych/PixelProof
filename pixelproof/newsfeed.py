@@ -148,7 +148,7 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
         t_cmp = 0.0
         n_pics = 0
 
-        def fetch(it):   # download and read one picture (runs 64 at a time, while matching goes on)
+        def fetch(it):   # download and read one picture (runs 128 at a time, while matching goes on)
             data = _download(sess, it[2])
             if not data:
                 return None
@@ -163,11 +163,11 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
                 return None
             return it, data, img
 
-        with ThreadPoolExecutor(max_workers=64) as pool:
+        with ThreadPoolExecutor(max_workers=128) as pool:
             pending = deque()
             nxt = 0
             while (nxt < len(items) or pending) and not should_stop():
-                while nxt < len(items) and len(pending) < 384:   # keep downloads running ahead
+                while nxt < len(items) and len(pending) < 512:   # keep downloads running ahead
                     pending.append(pool.submit(fetch, items[nxt]))
                     nxt += 1
                 batch = [pending.popleft().result() for _ in range(min(64, len(pending)))]

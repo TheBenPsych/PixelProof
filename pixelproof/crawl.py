@@ -64,6 +64,8 @@ class SiteResult:
     t_page: float = 0.0          # seconds spent opening pages
     t_pictures: float = 0.0      # seconds spent downloading pictures
     t_compare: float = 0.0       # seconds spent reading and comparing pictures
+    t_find: float = 0.0          # seconds spent opening the site and finding its pages (sitemap, news feed)
+    stats: dict = field(default_factory=dict)   # inside comparing (see check.CheckResult.stats)
 
 
 def _n(n: int, word: str) -> str:
@@ -113,6 +115,8 @@ WHY = {403: "it blocks robots (error 403)", 401: "it needs a login (error 401)",
 
 
 class SiteCrawler:
+    helpers = False   # read big sitemaps in a helper program (see prep.py)
+
     def __init__(self, domain: str, sess=None, log=print, base_url: str | None = None, delay: float = 1.0):
         self.domain = domain
         self.sess = sess or session()
@@ -177,28 +181,22 @@ class SiteCrawler:
             fetched += 1
             if not got or "<" not in got[1][:500]:
                 continue
-            text = got[1]
-            if re.search(r"<sitemapindex", text, re.I):
-                kids = []
-                for _, block in URL_BLOCK_RE.findall(text):
-                    loc = LOC_RE.search(block)
-                    if loc:
-                        d = DATE_RE.search(block)
-                        kids.append((loc.group(1).strip(), _parse_date(d.group(1)) if d else 0.0))
+            if self.helpers:   # big sitemaps (tens of thousands of pages) are read by a helper (prep.py)
+                from .prep import run
 
+                is_index, entries = run(sitemap_entries, got[1])
+            else:
+                is_index, entries = sitemap_entries(got[1])
+            if is_index:
                 def score(k):  # newest first; news and post sitemaps before others
                     url, when = k
                     bonus = 1e10 if re.search(r"news|post|article|stor", url, re.I) else 0
                     return when + bonus
-                kids.sort(key=score, reverse=True)
-                todo = [k for k, _ in kids[:5]] + todo
+                entries.sort(key=score, reverse=True)
+                todo = [k for k, _ in entries[:5]] + todo
                 continue
-            for _, block in URL_BLOCK_RE.findall(text):
-                loc = LOC_RE.search(block)
-                if not loc:
-                    continue
-                d = DATE_RE.search(block)
-                pages.setdefault(loc.group(1).strip(), _parse_date(d.group(1)) if d else 0.0)
+            for loc, when in entries:
+                pages.setdefault(loc, when)
             if pages and not self.sitemaps:
                 break  # one standard sitemap is enough
         return list(pages.items())
@@ -251,6 +249,17 @@ class SiteCrawler:
         return [], ""
 
 
+def sitemap_entries(text: str) -> tuple[bool, list[tuple[str, float]]]:
+    """Reads one sitemap. Returns (is it a list of other sitemaps, [(link, date as a number)])."""
+    out = []
+    for _, block in URL_BLOCK_RE.findall(text):
+        loc = LOC_RE.search(block)
+        if loc:
+            d = DATE_RE.search(block)
+            out.append((loc.group(1).strip(), _parse_date(d.group(1)) if d else 0.0))
+    return bool(re.search(r"<sitemapindex", text, re.I)), out
+
+
 def crawl_site(domain: str, store, clip, data_dir, pages_per_site=20, recheck_days=7, log=print,
                should_stop=lambda: False, seen_images=None, base_url=None, delay=1.0,
                on_page=None) -> SiteResult:
@@ -264,10 +273,13 @@ def crawl_site(domain: str, store, clip, data_dir, pages_per_site=20, recheck_da
         res.status, res.note = "skipped", "on your ban list"
         return res
     site = SiteCrawler(domain, log=log, base_url=base_url, delay=delay)
+    site.helpers = bool(getattr(clip, "fast", False))
+    t0 = time.time()
     if not site.start():
         res.status, res.note = "error", "the site did not answer: " + getattr(site.sess, "px_why", "no reason given")
         return res
     pages, how = site.find_pages(pages_per_site)
+    res.t_find = time.time() - t0
     res.found = len(pages)
     if not pages:
         res.status, res.note = "done", "no article pages found (the site may need a real browser)"
@@ -299,6 +311,8 @@ def crawl_site(domain: str, store, clip, data_dir, pages_per_site=20, recheck_da
         res.t_page += r.t_page
         res.t_pictures += r.t_pictures
         res.t_compare += r.t_compare
+        for k, v in r.stats.items():
+            res.stats[k] = res.stats.get(k, 0) + v
         res.pictures += len(r.queries) + r.failed
         if not r.error and not r.banned:
             res.matches += len(r.groups)

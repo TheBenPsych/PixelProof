@@ -52,6 +52,7 @@ class CheckResult:
     t_page: float = 0.0         # seconds: opening the page
     t_pictures: float = 0.0     # seconds: downloading its pictures
     t_compare: float = 0.0      # seconds: reading the pictures and comparing them with your library
+    stats: dict = field(default_factory=dict)   # inside comparing: prep, ai, search, double (seconds), n_double
 
     @property
     def stolen(self) -> list[Group]:
@@ -160,7 +161,10 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
         from .prep import prepare_many
 
         preps = []
-        for (label, data), p in zip(usable, prepare_many([d for _, d in usable], config.MIN_WEB_IMAGE_SIDE)):
+        t1 = time.time()
+        prepared = prepare_many([d for _, d in usable], config.MIN_WEB_IMAGE_SIDE)
+        res.stats["prep"] = time.time() - t1
+        for (label, data), p in zip(usable, prepared):
             if p == "small":
                 res.skipped_small += 1
             elif isinstance(p, str):
@@ -178,7 +182,8 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
 
         log(f"Comparing {len(preps)} pictures with your library ...")
         for start in range(0, len(preps), 32):
-            found = match_prepared(preps[start:start + 32], store, clip, lambda i, s=start: image_of(s + i))
+            found = match_prepared(preps[start:start + 32], store, clip,
+                                   lambda i, s=start: raw[queries[s + i].source], stats=res.stats)
             for q, matches in zip(queries[start:start + 32], found):
                 q.matches = matches
         images = [image_of(i) if q.matches else None for i, q in enumerate(queries)]

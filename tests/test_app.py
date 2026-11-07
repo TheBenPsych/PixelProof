@@ -216,7 +216,9 @@ def test_crawler_sitemap_feed_robots(engine, tmp_path, lib):  # noqa: F811
         assert any("done in" in ln and ln.startswith("[00:") for ln in job["lines"])
         assert any(ln.split("] ", 1)[1].startswith("Speed:") for ln in job["lines"])
         log = call(base, a.token, "/api/joblog").decode()
-        assert log.startswith("PixelProof") and "pages per minute" in log
+        assert log.startswith("PixelProof") and "pages per minute" in log and "Finding pages" in log
+        if getattr(a.clip, "fast", False):   # the all-cores way also splits up the comparing time
+            assert "Inside comparing: preparing pictures" in log
         # running again only looks at new pages
         call(base, a.token, "/api/crawl", {"pages": 10})
         job = wait_job(base, a.token)

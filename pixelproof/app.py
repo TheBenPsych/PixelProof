@@ -484,7 +484,8 @@ class App:
                 job.log(f"Skipping {len(big)} giant platforms that can't be crawled (like {', '.join(big[:3])}).")
 
             timings = []   # (seconds, site, pages checked)
-            sums = {"t_page": 0.0, "t_pictures": 0.0, "t_compare": 0.0, "pictures": 0}
+            sums = {"t_page": 0.0, "t_pictures": 0.0, "t_compare": 0.0, "pictures": 0, "t_find": 0.0}
+            inside: dict = {}   # comparing, split up: preparing, AI, library search, double-checks
             job.log(f"Crawling {len(targets)} sites, {workers} at once, up to {pages_per_site} new pages each. "
                     f"Your library: {main.count():,} images.")
 
@@ -537,9 +538,11 @@ class App:
                     job.log(f"{domain}: done in {took_s}. {r.checked} page{'s' if r.checked != 1 else ''} checked"
                             f"{per}, {r.matches} of your images found.{split}")
                     with lock:
-                        for k in ("t_page", "t_pictures", "t_compare"):
-                            sums[k] += getattr(r, k)
+                        for k in ("t_page", "t_pictures", "t_compare", "t_find"):
+                            sums[k] += getattr(r, k, 0.0)
                         sums["pictures"] += r.pictures
+                        for k, v in getattr(r, "stats", {}).items():
+                            inside[k] = inside.get(k, 0) + v
 
             with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
                 list(pool.map(one, targets))
@@ -557,6 +560,12 @@ class App:
                 job.log(f"Where the time went: opening pages {sums['t_page'] / busy:.0%}, downloading pictures "
                         f"{sums['t_pictures'] / busy:.0%}, comparing pictures {sums['t_compare'] / busy:.0%}. "
                         f"{sums['pictures'] / res['pages']:.0f} pictures per page on average.")
+                cmp = sums["t_compare"] or 1
+                if inside:
+                    job.log(f"Inside comparing: preparing pictures {inside.get('prep', 0) / cmp:.0%}, AI on the graphics "
+                            f"card {inside.get('ai', 0) / cmp:.0%}, library search {inside.get('search', 0) / cmp:.0%}, "
+                            f"double-checks {inside.get('double', 0) / cmp:.0%} ({inside.get('n_double', 0)} done).")
+                job.log(f"Finding pages (sitemaps, news feeds) took {sums['t_find'] / max(res['sites'], 1):.1f}s per site.")
             slow = sorted(worked, reverse=True)[:5]
             if slow and len(worked) > 5:
                 job.log("Slowest sites: " + ", ".join(f"{d} {t:.0f}s ({n} pages)" for t, d, n in slow))
