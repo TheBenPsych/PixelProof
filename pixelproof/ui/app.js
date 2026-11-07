@@ -364,7 +364,14 @@ function crawlView(main) {
   var d = S.data, watch = d.watch, big = {}; d.too_big.forEach(function (x) { big[x] = 1; });
   var info = {}; (d.crawl || []).forEach(function (r) { info[r.domain] = r; });
   var crawlable = watch.filter(function (w) { return !big[w]; });
-  var hits = {}; F().forEach(function (m) { if (m.page_url && shown(m)) hits[m.domain] = (hits[m.domain] || 0) + 1; });
+  var hits = {}, stolen = {}; F().forEach(function (m) {
+    if (!m.page_url || m.banned) return;
+    if (m.status === "stolen") stolen[m.domain] = (stolen[m.domain] || 0) + 1;
+    if (shown(m)) hits[m.domain] = (hits[m.domain] || 0) + 1;
+  });
+  var extra = Object.keys(stolen).filter(function (s) { return watch.indexOf(s) < 0; });
+  watch = watch.concat(extra);
+  crawlable = watch.filter(function (w) { return !big[w]; });
   main.appendChild(el("div", {"class": "head"}, [el("div", {}, [el("h1", {text: "Crawler"}),
     el("p", {text: "Visits the sites on your watch list, finds their newest pages and checks every picture. Matches show up in Review."})])]));
   var per = el("select", {"aria-label": "Pages per site"}, [10, 20, 50, 100].map(function (n) { return el("option", {value: String(n), text: n + " newest pages per site", selected: n === 20 ? true : null}); }));
@@ -375,20 +382,33 @@ function crawlView(main) {
     el("h2", {text: "Crawl my watch list"}),
     el("p", {text: plural(watch.length, "site") + " on your watch list. " + (watch.length - crawlable.length ? plural(watch.length - crawlable.length, "giant platform") + " (like Google or YouTube) can't be crawled and will be skipped. " : "") +
       "Pages it checked in the last 7 days are skipped, so running it again only looks at new pages."}),
+    Object.keys(stolen).length ? el("p", {"class": "muted", text: "Goes first: " + plural(Object.keys(stolen).length, "site") + " you marked as stolen from (" + Object.keys(stolen).slice(0, 4).join(", ") + (Object.keys(stolen).length > 4 ? ", …" : "") + "), then sites with earlier matches, then the rest."}) : null,
     el("div", {"class": "urlrow"}, [el("div", {"class": "lcard", style: "padding:0;flex:1;min-width:220px"}, [el("div", {"class": "add"}, [per])]),
       el("button", {"class": "btn ink big", type: "button", text: "Start crawling", disabled: crawlable.length ? null : true, onclick: function () {
         api("/api/crawl", {pages: Number(per.value)}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
       }})]),
     estEl
   ]));
+  var hrs = el("select", {"aria-label": "How far back"}, [[1, "Last 1 hour"], [3, "Last 3 hours"], [6, "Last 6 hours"], [24, "Last 24 hours"], [72, "Last 3 days"]].map(function (o) { return el("option", {value: String(o[0]), text: o[1], selected: o[0] === 3 ? true : null}); }));
+  var us = el("input", {type: "checkbox", checked: true, id: "us-only", style: "flex:none;width:16px;height:16px;margin:0"});
+  main.appendChild(el("div", {"class": "card addfolder"}, [
+    el("h2", {text: "Find new sites from the news"}),
+    el("p", {text: "Reads a free list of every news article published worldwide (from the GDELT project, updated every 15 minutes) and checks each article's main picture against your library. When one is yours, PixelProof checks the whole article, saves the evidence, and adds the site to your watch list by itself."}),
+    el("div", {"class": "urlrow"}, [el("div", {"class": "lcard", style: "padding:0;flex:1;min-width:220px"}, [el("div", {"class": "add"}, [hrs,
+        el("label", {"for": "us-only", style: "flex:none;width:auto;padding:0 6px;display:flex;gap:6px;align-items:center;white-space:nowrap;font-size:13.5px"}, [us, "US sites only"])])]),
+      el("button", {"class": "btn ink big", type: "button", text: "Check the news", onclick: function () {
+        api("/api/news", {hours: Number(hrs.value), us_only: us.checked}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
+      }})]),
+    el("span", {"class": "muted", text: "About 1,000 to 3,000 US articles per hour. 3 hours takes roughly 10 to 20 minutes. News lists it already read are skipped next time."})
+  ]));
   if (!watch.length) { main.appendChild(el("div", {"class": "empty", html: "<b>Your watch list is empty</b>Add sites in Site lists (you can import a .txt file)."})); return; }
-  var order = watch.slice().sort(function (a, b) { return (hits[b] || 0) - (hits[a] || 0) || ((info[b] || {}).last_crawl || "").localeCompare((info[a] || {}).last_crawl || "") || a.localeCompare(b); });
+  var order = watch.slice().sort(function (a, b) { return (stolen[b] || 0) - (stolen[a] || 0) || (hits[b] || 0) - (hits[a] || 0) || ((info[b] || {}).last_crawl || "").localeCompare((info[a] || {}).last_crawl || "") || a.localeCompare(b); });
   var tb = el("tbody");
   order.forEach(function (w) {
     var r = info[w] || {};
     var status = big[w] ? "Too big to crawl" : r.status === "error" ? "Problem: " + r.note : r.status === "skipped" ? r.note : r.last_crawl ? r.note : "Not crawled yet";
     tb.appendChild(el("tr", {"class": hits[w] ? "click" : null, onclick: hits[w] ? function () { go("sites", {site: w}); } : null}, [
-      el("td", {}, [el("span", {"class": "dom", text: w})]),
+      el("td", {}, [el("span", {"class": "dom", text: w}), stolen[w] ? el("span", {"class": "pill p-stolen", style: "margin-left:8px", text: "Stolen " + stolen[w] + "×"}) : null]),
       el("td", {text: r.last_crawl ? when(r.last_crawl, true) : "–"}),
       el("td", {"class": "n", text: r.checked != null ? String(r.checked) : "–"}),
       el("td", {"class": "n", text: hits[w] ? String(hits[w]) : "–"}),
@@ -434,7 +454,7 @@ function listsView(main) {
       approvedItems, addRow("site, like nypost.com", function (v, ph) { act("/api/approve", {photographer: ph, sites: [v]}, "Approved for " + ph); }, who)),
     lc("Sister sites (one company)", "PixelProof groups sites by itself when they share the same article links. You can also name a company here.",
       sisterItems, sisterAdd()),
-    lc("Sites to watch", "Sites known for using images without permission. The crawler (coming next) will visit these.",
+    lc("Sites to watch", "Sites known for using images without permission. The crawler visits these. The news feed adds sites here by itself when it finds your images.",
       d.watch.map(function (s) { return li(s, function () { act("/api/watch", {sites: [s], remove: true}, "Removed"); }); }),
       addRow("site to watch", function (v) { act("/api/watch", {sites: [v]}, "Added to the watch list"); }))
   ]));
@@ -600,6 +620,7 @@ function renderJob(j) {
   var running = j.state === "running";
   var title = j.kind === "check" ? (running ? "Checking " + j.label : "Checked " + j.label)
     : j.kind === "crawl" ? (running ? "Crawling " + j.label : "Crawl finished")
+    : j.kind === "news" ? (running ? "Reading the news feed" : "News feed finished")
     : (running ? "Fingerprinting your images" : "Fingerprinting finished");
   if (j.state === "error") title = "That did not work";
   if (j.state === "stopped") title = "Stopped";
@@ -610,6 +631,7 @@ function renderJob(j) {
   if (running) {
     kids.push(el("div", {"class": "bar" + (j.total ? "" : " indet")}, [el("i", {style: "width:" + pct + "%"})]));
     if (j.kind === "crawl" && j.total && j.result) kids.push(el("div", {"class": "line", style: "color:var(--ink)", text: j.done + " of " + plural(j.total, "site") + " · " + plural(j.result.pages || 0, "page") + " checked · " + plural(j.found, "new match", "new matches")}));
+    if (j.kind === "news" && j.result) kids.push(el("div", {"class": "line", style: "color:var(--ink)", text: (j.total ? j.done + " of " + j.total + " news lists · " : "") + plural(j.result.articles || 0, "article") + " checked · " + plural(j.found, "new match", "new matches") + " · " + plural((j.result.new_sites || []).length, "new site")}));
     if (j.kind === "index" && j.total) kids.push(el("div", {"class": "line", text: j.done.toLocaleString() + " of " + j.total.toLocaleString() + " new images (" + pct + "%)"}));
   }
   kids.push(el("div", {"class": "line", text: last}));
@@ -621,6 +643,10 @@ function renderJob(j) {
   var res = j.result || {};
   if (!running && j.kind === "crawl" && res.new_ids) {
     kids.push(el("div", {"class": "line", style: "color:var(--ink);font-weight:600", text: plural(res.pages || 0, "page") + " checked on " + plural(res.sites || 0, "site") + " · " + (res.new_ids.length ? plural(res.new_ids.length, "new match", "new matches") : "no new matches")}));
+    if (res.new_ids.length) acts.appendChild(el("button", {"class": "btn ink small", type: "button", text: "Review " + plural(res.new_ids.length, "new match", "new matches"), onclick: function () { box.hidden = true; go("review", {cur: res.new_ids[0]}); }}));
+  }
+  if (!running && j.kind === "news" && res.new_ids) {
+    kids.push(el("div", {"class": "line", style: "color:var(--ink);font-weight:600", text: plural(res.articles || 0, "news article") + " checked · " + (res.new_ids.length ? plural(res.new_ids.length, "new match", "new matches") : "no new matches") + (res.new_sites && res.new_sites.length ? " · added to your watch list: " + res.new_sites.join(", ") : "")}));
     if (res.new_ids.length) acts.appendChild(el("button", {"class": "btn ink small", type: "button", text: "Review " + plural(res.new_ids.length, "new match", "new matches"), onclick: function () { box.hidden = true; go("review", {cur: res.new_ids[0]}); }}));
   }
   if (!running && j.kind === "check" && res.banned) {

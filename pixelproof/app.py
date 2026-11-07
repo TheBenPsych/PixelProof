@@ -181,6 +181,8 @@ class App:
         self.bye_at = 0.0
         self.base_urls: dict[str, str] = {}   # tests: domain -> http://host:port
         self.crawl_delay = 1.0                # seconds between pages on one site (be polite)
+        self.news_session = None              # tests: a fake web session for the news feed
+        self.news_stamps = None               # tests: which 15-minute news lists to read
 
     # ---------- AI model (loaded once, the first time it is needed) ----------
     def get_clip(self, job: Job):
@@ -390,11 +392,17 @@ class App:
                 return {"ok": False, "error": "Your library is empty. Add a folder of your images first (My images)."}
             watch = _read_sites(self.data_dir / WATCH_FILE)
             done = {r[0]: r[1] or "" for r in self.store.db.execute("SELECT domain, last_crawl FROM crawl_sites")}
+            stolen, found = self._infringers()
         targets = [s for s in (sites or watch) if s]
+        if not sites:
+            # sites you marked as stolen from go first, even if they are not on the watch list
+            targets += [d for d in stolen if d not in targets]
         if not targets:
             return {"ok": False, "error": "Your watch list is empty. Add sites in Site lists first."}
-        if not sites:  # sites never crawled first, then the ones crawled longest ago
-            targets.sort(key=lambda d: done.get(d, ""))
+        if not sites:
+            # 1) most "stolen" matches  2) any match found before  3) never crawled  4) crawled longest ago
+            targets.sort(key=lambda d: (-stolen.get(d, 0), -found.get(d, 0), done.get(d, "")))
+        first = [d for d in targets if d in stolen]
         pages_per_site = max(1, min(int(pages_per_site or 20), 500))
         factory = self.clip_factory
 
@@ -427,6 +435,9 @@ class App:
             seen: set = set()
             job.total = len(targets)
             job.result = {"new_ids": [], "sites": 0, "pages": 0, "matches": 0, "skipped": 0}
+            if first and not sites:
+                job.log(f"Checking the {len(first)} site{'s' if len(first) != 1 else ''} you marked as stolen from "
+                        f"first ({', '.join(first[:3])}{' ...' if len(first) > 3 else ''}).")
             big = [d for d in targets if d in TOO_BIG]
             if big:
                 job.log(f"Skipping {len(big)} giant platforms that can't be crawled (like {', '.join(big[:3])}).")
@@ -478,6 +489,72 @@ class App:
 
         label = targets[0] if len(targets) == 1 else f"{len(targets)} sites"
         return self.start_job("crawl", label, work)
+
+    def _infringers(self) -> tuple[dict, dict]:
+        """Sites with matches: {site: number marked stolen}, {site: number of matches}. Banned sites are left out."""
+        from .page import load_banned
+
+        banned = load_banned(self.data_dir / "banned.txt")
+        stolen, found = {}, {}
+        for dom, status, n in self.store.db.execute(
+                "SELECT domain, COALESCE(status,'new'), COUNT(*) FROM findings "
+                "WHERE domain IS NOT NULL AND domain<>'' GROUP BY domain, status"):
+            if dom in banned or any(dom.endswith("." + b) for b in banned):
+                continue
+            if status == "stolen":
+                stolen[dom] = stolen.get(dom, 0) + n
+            if status != "not_match":
+                found[dom] = found.get(dom, 0) + n
+        return stolen, found
+
+    def news(self, hours: float = 3, us_only: bool = True) -> dict:
+        """Reads the free GDELT news feed and checks every article's main picture against the library."""
+        from . import newsfeed
+        from .cli import _library_model
+        from .store import Store
+
+        with self.lock:
+            if self.store.count() == 0:
+                return {"ok": False, "error": "Your library is empty. Add a folder of your images first (My images)."}
+        hours = max(0.25, min(float(hours or 3), 72))
+
+        def work(job: Job):
+            clip = self.get_clip(job)
+            store = Store(self.data_dir)
+            if _library_model(store) != clip.name:
+                job.state = "error"
+                job.log("Your library needs fresh fingerprints first. Open My images and add your folder again.")
+                return
+            store.load_indexes(clip.dim)
+            watch = set(_read_sites(self.data_dir / WATCH_FILE))
+
+            def add_watch(site):
+                if site in watch:
+                    return False
+                watch.add(site)
+                self.watch([site])
+                return True
+
+            job.result = {"new_ids": [], "articles": 0, "pictures": 0, "matches": 0, "new_sites": []}
+
+            def progress(i, n, res):
+                job.done, job.total = i - 1, n
+                job.result.update({k: res[k] for k in ("new_ids", "articles", "pictures", "matches", "new_sites")})
+                job.found = len(res["new_ids"])
+
+            job.log(f"Reading the news feed for the last {hours:g} hour{'s' if hours != 1 else ''}"
+                    + (" (US sites only)" if us_only else "") + " ...")
+            res = newsfeed.scan(store, clip, self.data_dir, hours=hours, us_only=us_only, log=job.log,
+                                should_stop=lambda: job.stop, on_progress=progress, add_watch=add_watch,
+                                sess=self.news_session, stamps=self.news_stamps)
+            progress(res["lists"] + 1, max(res["lists"], 1), res)
+            job.done = job.total
+            job.result.update(res)
+            job.log(f"Finished: {res['articles']} news articles checked, {len(res['new_ids'])} new matches, "
+                    f"{len(res['new_sites'])} new site{'s' if len(res['new_sites']) != 1 else ''} added to your watch list.")
+            store.db.close()
+
+        return self.start_job("news", f"News feed, last {hours:g} h", work)
 
     def set_status(self, ids, status) -> dict:
         with self.lock:
@@ -791,6 +868,8 @@ def route(app: App, path: str, b: dict) -> dict:
         return app.check(b.get("targets") or [b.get("target", "")])
     if path == "/api/crawl":
         return app.crawl(b.get("sites") or None, int(b.get("pages") or 20))
+    if path == "/api/news":
+        return app.news(b.get("hours") or 3, bool(b.get("us_only", True)))
     if path == "/api/index":
         return app.index(b.get("folder", ""))
     if path == "/api/bye":

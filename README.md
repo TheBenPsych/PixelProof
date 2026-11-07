@@ -11,7 +11,7 @@ It never uploads your images anywhere.
 | **Review** | Each match shows **ours vs theirs** side by side (or **Swipe** to slide between them). Press **Y** (stolen), **N** (not a match) or **→** (skip). |
 | **Photographers** | Every photographer from your folders, with their matches, filtered by year and quarter. |
 | **Sites** | Every site where your images turned up. Sister sites (one company) are grouped. |
-| **Crawler** | Visits every site on your watch list, finds its newest pages and checks every picture. Matches land in Review. |
+| **Crawler** | Visits every site on your watch list, finds its newest pages and checks every picture. Matches land in Review. It can also read the free GDELT news feed to find new sites using your pictures. |
 | **Site lists** | Banned sites, sites approved for one photographer (licensed), sister-site companies, and sites to watch. Import a list from a file. |
 | **My images** | Add a folder of your images (fingerprinting), with a progress bar and a Stop button. |
 
@@ -43,6 +43,18 @@ pick how many of the newest pages to check per site, and press **Start crawling*
 - Giant platforms like Google, YouTube or Facebook are skipped; use **Check one page** there.
 - Sites built entirely with JavaScript may show few pictures; that is a known limit for now.
 - You can stop any time and start again later.
+- Sites where you marked a match as stolen go first (even if they are not on the watch list), then sites with
+  earlier matches, then sites never crawled, then the ones crawled longest ago.
+
+### Find new sites from the news
+
+**Crawler → Find new sites from the news** reads the free news list from the GDELT project
+(gdeltproject.org, no account needed). Every 15 minutes it lists the new articles it saw worldwide, with each
+article's main picture. PixelProof checks every main picture against your library. When one is yours, it checks
+the whole article (with evidence, like **Check one page**) and **adds that site to your watch list** by itself.
+
+- Pick how far back to look (1 hour to 3 days). "US sites only" is on by default.
+- News lists it already read are skipped next time, so run it as often as you like.
 
 ---
 

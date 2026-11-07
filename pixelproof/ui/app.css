@@ -202,6 +202,7 @@ tr.sub td:first-child{padding-left:32px}
 .lcard li .mono{font-size:12px}
 .lcard .add{display:flex;gap:6px;flex-wrap:wrap}
 .lcard .add input,.lcard .add select{flex:1;min-width:120px;border:1px solid var(--line);background:var(--soft);border-radius:9px;padding:7px 10px;font-size:13px}
+.lcard .add input[type=checkbox]{flex:none;min-width:0;width:16px;height:16px;padding:0;margin:0}
 .x{border:0;background:transparent;color:var(--muted);font-size:17px;line-height:1;padding:0 2px}
 .x:hover{color:var(--exact)}
 

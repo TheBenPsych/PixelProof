@@ -244,3 +244,89 @@ def test_feed_parsing():
     assert sc.start()
     pages, how = sc.find_pages(10)
     assert how == "news feed" and pages == ["https://site.com/2026/a-story", "https://site.com/2026/older"]
+
+
+def _gkg_zip(rows):
+    import io
+    import zipfile
+
+    lines = []
+    for site, url, img in rows:
+        cols = [""] * 27
+        cols[0], cols[1], cols[2], cols[3], cols[4], cols[18] = "1-1", "20261107031500", "1", site, url, img
+        lines.append("\t".join(cols))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("20261107031500.gkg.csv", "\n".join(lines))
+    return buf.getvalue()
+
+
+def test_news_feed_finds_new_sites(engine, monkeypatch):
+    """A fake GDELT list: one US article uses our picture, one foreign one does too, one is unrelated."""
+    import requests
+
+    from pixelproof import newsfeed
+
+    a, base, port, data = engine
+    real_is_us = newsfeed.is_us
+    monkeypatch.setattr(newsfeed, "is_us", lambda d: d == "127.0.0.1" or real_is_us(d))  # the test site
+    web = f"http://127.0.0.1:{port}/ixp/993/p/anchor-article"
+    rows = [("localpaper.com", f"{web}/", f"{web}/maya.jpg"),
+            ("dawn.com", "https://www.dawn.com/news/1", f"{web}/luis.jpg"),
+            ("other.com", "https://other.com/x", "https://other.com/none.jpg"),
+            # the article page is gone but its picture is still there: the match is kept from the picture
+            ("127.0.0.1", f"http://127.0.0.1:{port}/gone/", f"{web}/luis.jpg?v=2")]
+    zipped = _gkg_zip(rows)
+    real = requests.Session()
+
+    class Sess:
+        def get(self, url, **k):
+            if url.startswith(newsfeed.GDELT):
+                r = requests.Response()
+                r.status_code, r._content = 200, zipped
+                return r
+            if "other.com" in url:
+                raise requests.ConnectionError("no such site")
+            return real.get(url, **k)
+
+    a.news_session, a.news_stamps = Sess(), ["20261107031500"]
+    assert call(base, a.token, "/api/news", {"hours": 1, "us_only": True})["ok"]
+    job = wait_job(base, a.token)
+    assert job["state"] == "done", job["lines"]
+    res = job["result"]
+    assert res["articles"] == 3 and res["matches"] == 2            # dawn.com left out (not US)
+    assert res["new_sites"] == ["127.0.0.1"]                        # the article's real site
+    st = call(base, a.token, "/api/state")
+    assert "127.0.0.1" in st["watch"] and len(res["new_ids"]) == 3  # whole article (2) + gone page (1)
+    gone = [f for f in st["findings"] if f["page_url"].endswith("/gone/")]
+    assert gone and gone[0]["has_evidence"] and "news feed" in gone[0]["note"]
+    # the same list is not read twice
+    call(base, a.token, "/api/news", {"hours": 1})
+    job = wait_job(base, a.token)
+    assert job["result"]["articles"] == 0 and any("already checked" in ln for ln in job["lines"])
+
+
+def test_us_only_filter():
+    from pixelproof.newsfeed import is_us, parse_gkg, stamps_back
+
+    assert is_us("nypost.com") and is_us("wtug.com") and is_us("kxbr.fm")
+    assert not is_us("bbc.co.uk") and not is_us("aljazeera.com") and not is_us("www.thehindu.com")
+    assert stamps_back("20261107031500", 1) == ["20261107031500", "20261107030000", "20261107024500", "20261107023000"]
+    raw = b"header\tonly\n" + b"\t".join([b"x"] * 3 + [b"a.com", b"https://a.com/1"] + [b""] * 13 + [b"https://a.com/p.jpg"] + [b""] * 8)
+    assert parse_gkg(raw) == [("a.com", "https://a.com/1", "https://a.com/p.jpg")]
+
+
+def test_crawl_checks_stolen_sites_first(engine):
+    a, base, port, data = engine
+    url = f"http://127.0.0.1:{port}/ixp/993/p/anchor-article/"
+    call(base, a.token, "/api/check", {"targets": [url]})
+    job = wait_job(base, a.token)
+    call(base, a.token, "/api/status", {"ids": job["result"]["new_ids"][:1], "status": "stolen"})
+    stolen, found = a._infringers()
+    assert stolen == {"127.0.0.1": 1} and found == {"127.0.0.1": 2}
+    call(base, a.token, "/api/watch", {"sites": ["zzz.example", "aaa.example"]})
+    a.base_urls = {"127.0.0.1": f"http://127.0.0.1:{port}", "zzz.example": "http://127.0.0.1:9", "aaa.example": "http://127.0.0.1:9"}
+    a.crawl_delay = 0
+    assert call(base, a.token, "/api/crawl", {"pages": 2})["ok"]          # 127.0.0.1 is not on the watch list
+    job = wait_job(base, a.token)
+    assert job["total"] == 3 and any("marked as stolen from first (127.0.0.1)" in ln for ln in job["lines"])
