@@ -20,8 +20,8 @@ def session():
     from requests.adapters import HTTPAdapter
 
     s = requests.Session()
-    s.mount("https://", HTTPAdapter(pool_connections=32, pool_maxsize=32))
-    s.mount("http://", HTTPAdapter(pool_connections=32, pool_maxsize=32))
+    s.mount("https://", HTTPAdapter(pool_connections=64, pool_maxsize=64))
+    s.mount("http://", HTTPAdapter(pool_connections=64, pool_maxsize=64))
     s.headers.update({"User-Agent": config.USER_AGENT, "Accept-Language": "en-US,en;q=0.9",
                       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"})
     return s

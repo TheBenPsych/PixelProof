@@ -431,6 +431,8 @@ class App:
                 job.log("Your library needs fresh fingerprints first. Open My images and add your folder again.")
                 return
             main.load_indexes(clip.dim)
+            if str(getattr(clip, "device", "")).startswith("cuda") and main.search_on_card(clip.device):
+                job.log("Searching your library on the graphics card.")
             lock = threading.Lock()
 
             class SharedClip:  # one AI model on the graphics card, used by one site at a time
@@ -464,7 +466,8 @@ class App:
 
             timings = []   # (seconds, site, pages checked)
             sums = {"t_page": 0.0, "t_pictures": 0.0, "t_compare": 0.0, "pictures": 0}
-            job.log(f"Crawling {len(targets)} sites, {workers} at once, up to {pages_per_site} new pages each.")
+            job.log(f"Crawling {len(targets)} sites, {workers} at once, up to {pages_per_site} new pages each. "
+                    f"Your library: {main.count():,} images.")
 
             def one(domain):
                 if job.stop:
@@ -472,6 +475,7 @@ class App:
                 t0 = time.time()
                 st = Store(self.data_dir)
                 st._clip_index, st._hash_index = main._clip_index, main._hash_index
+                st._card = getattr(main, "_card", None)
                 counted = {"pages": 0, "matches": 0, "ids": 0}
 
                 def tally(r):  # adds this site's progress to the totals as each page finishes
@@ -620,6 +624,8 @@ class App:
                 job.log("Your library needs fresh fingerprints first. Open My images and add your folder again.")
                 return
             store.load_indexes(clip.dim)
+            if str(getattr(clip, "device", "")).startswith("cuda") and store.search_on_card(clip.device):
+                job.log("Searching your library on the graphics card.")
             watch = set(_read_sites(self.data_dir / WATCH_FILE))
 
             from .sites import is_unlikely

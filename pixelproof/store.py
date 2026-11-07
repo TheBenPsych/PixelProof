@@ -270,7 +270,40 @@ class Store:
         self._clip_index = faiss.deserialize_index(np.fromfile(clip_path, dtype=np.uint8))
         self._hash_index = faiss.deserialize_index_binary(np.fromfile(hash_path, dtype=np.uint8))
 
+    def search_on_card(self, device: str) -> bool:
+        """Copies the library's AI fingerprints to the graphics card so each search takes a fraction of a
+        millisecond, instead of reading through every fingerprint on the processor (slow for big libraries
+        and with many sites at once). Returns False and keeps the normal search if that is not possible."""
+        try:
+            import faiss
+            import torch
+
+            idx = self._clip_index
+            inner = faiss.downcast_index(idx.index)
+            n, d = inner.ntotal, inner.d
+            if n == 0:
+                return False
+            xb = faiss.rev_swig_ptr(inner.get_xb(), n * d)
+            vecs = np.array(xb, dtype=np.float32).reshape(n, d)
+            dtype = torch.float16 if str(device).startswith("cuda") else torch.float32
+            self._card = (torch.from_numpy(vecs).to(device=device, dtype=dtype),
+                          faiss.vector_to_array(idx.id_map).astype(np.int64), device, dtype)
+            return True
+        except Exception:
+            self._card = None
+            return False
+
     def search_clip(self, vecs: np.ndarray, k: int):
+        card = getattr(self, "_card", None)
+        if card is not None:
+            import torch
+
+            lib, ids, device, dtype = card
+            k = min(k, lib.shape[0])
+            with torch.no_grad():
+                q = torch.from_numpy(np.ascontiguousarray(vecs, dtype=np.float32)).to(device=device, dtype=dtype)
+                sims, pos = torch.topk(q @ lib.T, k, dim=1)
+            return sims.float().cpu().numpy(), ids[pos.cpu().numpy()]
         if self._clip_index.ntotal == 0:
             return np.zeros((len(vecs), 0)), np.zeros((len(vecs), 0), dtype=np.int64)
         return self._clip_index.search(np.ascontiguousarray(vecs, dtype=np.float32), min(k, self._clip_index.ntotal))

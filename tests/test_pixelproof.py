@@ -393,3 +393,18 @@ def test_double_check_ignores_a_shared_flag():
     b.paste(flag().resize((285, 150)), (400, 300))
     assert same_photo_score(a, b) == 0
     assert same_photo_score(a.crop((40, 40, 700, 500)), a) > 20
+
+
+def test_search_on_card_gives_same_results(lib):
+    """The graphics-card search (tested here on the processor) finds the same images as the normal search."""
+    pytest.importorskip("torch")
+    root, files, data = lib
+    store = Store(data)
+    clip = FakeClip()
+    index_folder(str(root), store, clip, progress=False, log=lambda *a: None)
+    store.load_indexes(clip.dim)
+    q = clip.embed([Image.open(p) for p in list(files.values())[:3]])
+    s1, i1 = store.search_clip(q, 3)
+    assert store.search_on_card("cpu")
+    s2, i2 = store.search_clip(q, 3)
+    assert (i1 == i2).all() and np.allclose(s1, s2, atol=1e-4)
