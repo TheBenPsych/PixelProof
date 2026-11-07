@@ -31,7 +31,17 @@ CREATE TABLE IF NOT EXISTS findings (
     found_at TEXT, page_url TEXT, image_url TEXT, domain TEXT,
     image_id INTEGER, category TEXT, clip_sim REAL, hash_dist INTEGER, note TEXT
 );
+CREATE TABLE IF NOT EXISTS pages (
+    id INTEGER PRIMARY KEY,
+    url TEXT UNIQUE NOT NULL, domain TEXT, path_key TEXT,
+    first_checked TEXT, last_checked TEXT, pictures INTEGER, found INTEGER
+);
+CREATE INDEX IF NOT EXISTS pages_path_key ON pages(path_key);
 """
+
+# Columns added after step 1. Old libraries get them the first time step 2 opens them.
+FINDING_COLUMNS = {"last_seen": "TEXT", "path_key": "TEXT", "thumb": "BLOB",
+                   "width": "INTEGER", "height": "INTEGER", "times_seen": "INTEGER DEFAULT 1"}
 
 
 def now() -> str:
@@ -49,6 +59,13 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(findings)")}
+        for col, kind in FINDING_COLUMNS.items():
+            if col not in have:
+                self.db.execute(f"ALTER TABLE findings ADD COLUMN {col} {kind}")
+        self.db.execute("CREATE INDEX IF NOT EXISTS findings_image ON findings(image_id)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS findings_page ON findings(page_url, image_id)")
+        self.db.commit()
         self._clip_index = None
         self._hash_index = None
 
@@ -100,14 +117,67 @@ class Store:
         return self.db.execute("SELECT COUNT(*) FROM images WHERE clip IS NOT NULL").fetchone()[0]
 
     # ---------- findings ----------
-    def save_finding(self, page_url, image_url, domain, image_id, category, clip_sim, hash_dist, note) -> tuple[int, str]:
-        found_at = now()
+    def save_finding(self, page_url, image_url, domain, image_id, category, clip_sim, hash_dist, note,
+                     path_key=None, thumb=None, width=None, height=None) -> tuple[int, str]:
+        """Saves one of our images found on one page. Checking the same page again keeps the
+        same match ID and first-found date, and only updates "last seen"."""
+        seen = now()
+        where = page_url or image_url
+        row = self.db.execute(
+            "SELECT id, found_at FROM findings WHERE COALESCE(NULLIF(page_url,''), image_url)=? AND image_id=? "
+            "ORDER BY id LIMIT 1", (where, image_id)).fetchone()
+        if row:
+            self.db.execute(
+                """UPDATE findings SET last_seen=?, times_seen=COALESCE(times_seen,1)+1, image_url=?, domain=?,
+                   category=?, clip_sim=?, hash_dist=?, note=?, path_key=?, thumb=COALESCE(?, thumb),
+                   width=?, height=? WHERE id=?""",
+                (seen, image_url, domain, category, clip_sim, hash_dist, note, path_key, thumb, width, height, row[0]))
+            return row[0], row[1]
         cur = self.db.execute(
-            """INSERT INTO findings(found_at, page_url, image_url, domain, image_id, category, clip_sim, hash_dist, note)
-               VALUES(?,?,?,?,?,?,?,?,?)""",
-            (found_at, page_url, image_url, domain, image_id, category, clip_sim, hash_dist, note),
+            """INSERT INTO findings(found_at, last_seen, page_url, image_url, domain, image_id, category, clip_sim,
+                                    hash_dist, note, path_key, thumb, width, height, times_seen)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+            (seen, seen, page_url, image_url, domain, image_id, category, clip_sim, hash_dist, note,
+             path_key, thumb, width, height),
         )
-        return cur.lastrowid, found_at
+        return cur.lastrowid, seen
+
+    def other_findings(self, image_id: int, not_page: str) -> list[sqlite3.Row]:
+        """Every other page where this image of ours was found before (repeat copies)."""
+        return self.db.execute(
+            "SELECT * FROM findings WHERE image_id=? AND COALESCE(NULLIF(page_url,''), image_url)<>? "
+            "ORDER BY found_at", (image_id, not_page)).fetchall()
+
+    def all_findings(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT f.*, i.path AS our_path, i.photographer, i.year, i.quarter, i.file_date, "
+            "i.width AS our_w, i.height AS our_h FROM findings f LEFT JOIN images i ON i.id=f.image_id "
+            "ORDER BY f.found_at").fetchall()
+
+    # ---------- pages we checked (used to spot sister sites) ----------
+    def save_page(self, url, domain, path_key, pictures, found) -> None:
+        t = now()
+        self.db.execute(
+            """INSERT INTO pages(url, domain, path_key, first_checked, last_checked, pictures, found)
+               VALUES(?,?,?,?,?,?,?)
+               ON CONFLICT(url) DO UPDATE SET domain=excluded.domain, path_key=excluded.path_key,
+                 last_checked=excluded.last_checked, pictures=excluded.pictures, found=excluded.found""",
+            (url, domain, path_key, t, t, pictures, found))
+
+    def page_keys(self) -> list[tuple[str, str, str]]:
+        rows = self.db.execute(
+            "SELECT url, domain, path_key FROM pages WHERE path_key IS NOT NULL "
+            "UNION SELECT page_url, domain, path_key FROM findings WHERE path_key IS NOT NULL AND page_url<>''")
+        return [(r[0], r[1], r[2]) for r in rows]
+
+    def pages_with_key(self, path_key: str, not_url: str) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM pages WHERE path_key=? AND url<>? ORDER BY first_checked", (path_key, not_url)).fetchall()
+
+    def count_pages(self) -> int:
+        return self.db.execute(
+            "SELECT COUNT(*) FROM (SELECT url FROM pages UNION SELECT page_url FROM findings WHERE page_url<>'')"
+        ).fetchone()[0]
 
     # ---------- FAISS search indexes ----------
     def mark_dirty(self) -> None:

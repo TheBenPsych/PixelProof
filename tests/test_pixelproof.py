@@ -189,3 +189,142 @@ def test_cli_model_change_refingerprints(lib, monkeypatch, capsys):
     assert "fresh fingerprint" in capsys.readouterr().out
     assert cli.main(["--data", str(data), "check", str(files["IMG_5102.jpg"]), "--no-open"]) == 0
     assert "1 of your images found" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- step 2
+
+from pixelproof.sites import Approvals, SisterSites, add_approval, load_approvals, path_key  # noqa: E402
+from pixelproof.summary import render_summary, write_summary  # noqa: E402
+
+
+def test_path_key():
+    a = path_key("https://catfishtuscaloosa.com/ixp/993/p/anchor-tuscaloosa-apps-2027-chamber/")
+    b = path_key("https://wtug.com/ixp/993/p/anchor-tuscaloosa-apps-2027-chamber")
+    assert a == b == "/ixp/993/p/anchor-tuscaloosa-apps-2027-chamber"
+    assert path_key("https://wtug.com/") is None
+    assert path_key("https://wtug.com/news/") is None          # too short to prove anything
+    assert path_key("https://x.com/2026/index.html") is None
+    assert path_key("C:/pics/a.jpg") is None
+
+
+def test_sister_sites_and_named_company():
+    pages = [("https://catfishtuscaloosa.com/ixp/993/p/a-long-article/", "catfishtuscaloosa.com", "/ixp/993/p/a-long-article"),
+             ("https://wtug.com/ixp/993/p/a-long-article/", "wtug.com", "/ixp/993/p/a-long-article"),
+             ("https://other.com/2026/11/unrelated-story", "other.com", "/2026/11/unrelated-story")]
+    s = SisterSites([], pages)
+    g = s.group_of("wtug.com")
+    assert g and g.domains == ["catfishtuscaloosa.com", "wtug.com"] and not g.named
+    assert s.group_of("news.wtug.com") is g
+    assert s.group_of("other.com") is None
+    assert "/ixp/993/p/a-long-article" in g.shared
+    s = SisterSites([("Tuscaloosa Radio", ["wtug.com", "https://www.extra-site.com"])], pages)
+    g = s.group_of("catfishtuscaloosa.com")
+    assert g.name == "Tuscaloosa Radio" and g.named and "extra-site.com" in g.domains
+
+
+def test_approvals_per_photographer(tmp_path):
+    s = SisterSites([("Tuscaloosa Radio", ["wtug.com", "catfishtuscaloosa.com"])], [])
+    a = Approvals([("Yang 2026", ["nypost.com"]), ("Maya Chen", ["Tuscaloosa Radio"])], s)
+    assert a.licensed("Yang", "nypost.com") == "nypost.com"
+    assert a.licensed("yang", "m.nypost.com") == "nypost.com"
+    assert a.licensed("Luis", "nypost.com") is None            # only for that photographer
+    assert a.licensed("Maya Chen", "wtug.com") == "Tuscaloosa Radio"
+    assert a.licensed("Maya Chen", "nypost.com") is None
+    config.data_dir(tmp_path)
+    assert add_approval(tmp_path, "Yang", ["nypost.com"]) == ["nypost.com"]
+    assert add_approval(tmp_path, "yang", ["nypost.com", "wtug.com"]) == ["wtug.com"]
+    text = (tmp_path / "approved.txt").read_text()
+    assert text.count("\nYang = nypost.com, wtug.com\n") == 1 and text.count("\nYang =") == 1
+    assert load_approvals(tmp_path).licensed("Yang", "wtug.com") == "wtug.com"
+
+
+def _serve(site):
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(site))
+    handler.log_message = lambda *a: None
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_step2_end_to_end(lib, tmp_path, monkeypatch, capsys):
+    """Two 'sites' (localhost and 127.0.0.1) carry the same article: sister sites, repeat copies, licensing."""
+    root, files, data = lib
+    store = Store(data)
+    clip = FakeClip()
+    index_folder(str(root), store, clip, progress=False, log=lambda *a: None)
+    store.load_indexes(clip.dim)
+
+    site = tmp_path / "site"
+    art = site / "ixp" / "993" / "p" / "anchor-article"
+    art.mkdir(parents=True)
+    Image.open(files["MayaChen_2026-02-14_0031.jpg"]).resize((400, 300)).save(art / "maya.jpg", quality=70)
+    Image.open(files["LO 04-03-2026 shoot.png"]).resize((400, 300)).save(art / "luis.jpg", quality=70)
+    (art / "index.html").write_text("<img src='maya.jpg'><img src='luis.jpg'>")
+    other = site / "2026" / "another-story"
+    other.mkdir(parents=True)
+    Image.open(files["MayaChen_2026-02-14_0031.jpg"]).resize((300, 225)).save(other / "m.jpg", quality=70)
+    (other / "index.html").write_text("<img src='m.jpg'>")
+
+    server = _serve(site)
+    port = server.server_port
+    a_url = f"http://127.0.0.1:{port}/ixp/993/p/anchor-article/"
+    b_url = f"http://localhost:{port}/ixp/993/p/anchor-article/"
+    c_url = f"http://127.0.0.1:{port}/2026/another-story/"
+    try:
+        add_approval(data, "Luis Ortega", ["localhost"])           # Luis licensed that site
+        ra = check_target(a_url, store, clip, data, log=lambda *a: None)
+        assert len(ra.stolen) == 2 and not ra.sister_group
+        first_id = {g.row["photographer"]: g.match_id for g in ra.groups}
+
+        rb = check_target(b_url, store, clip, data, log=lambda *a: None)
+        assert rb.sister_group and set(rb.sister_group.domains) == {"127.0.0.1", "localhost"}
+        assert [p["url"] for p in rb.sister_pages] == [a_url]
+        luis = next(g for g in rb.groups if g.row["photographer"] == "Luis Ortega")
+        maya = next(g for g in rb.groups if g.row["photographer"] == "Maya Chen")
+        assert luis.licensed == "localhost" and not maya.licensed
+        assert [f["page_url"] for f in maya.elsewhere] == [a_url]          # repeat copy
+        text = write_report(rb, data).read_text(encoding="utf-8")
+        assert "Sister site" in text and "Licensed for Luis Ortega" in text and "Repeat copy" in text
+
+        # Checking the same page again keeps the same match ID.
+        ra2 = check_target(a_url, store, clip, data, log=lambda *a: None)
+        assert {g.row["photographer"]: g.match_id for g in ra2.groups} == first_id
+        assert ra2.sister_group is not None                                  # now known as a sister site
+
+        check_target(c_url, store, clip, data, log=lambda *a: None)
+    finally:
+        server.shutdown()
+
+    html_text = render_summary(store, data)
+    assert "Same photo on many pages" in html_text and "Every match, by site" in html_text
+    assert "Sister sites: 127.0.0.1 + localhost" in html_text
+    assert "Licensed uses (1)" in html_text and "Luis Ortega" in html_text
+    assert store.count_pages() == 3
+    assert write_summary(store, data).exists()
+
+    # CLI: approve without questions.
+    from pixelproof import cli
+
+    assert cli.main(["--data", str(data), "approve", "maya chen", "https://www.nypost.com/x", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "Approved for Maya Chen: nypost.com" in out
+    assert cli.main(["--data", str(data), "summary", "--no-open"]) == 0
+
+
+def test_old_step1_database_upgrades(tmp_path):
+    import sqlite3
+
+    db = sqlite3.connect(tmp_path / "library.db")
+    db.executescript("""CREATE TABLE findings (id INTEGER PRIMARY KEY, found_at TEXT, page_url TEXT, image_url TEXT,
+        domain TEXT, image_id INTEGER, category TEXT, clip_sim REAL, hash_dist INTEGER, note TEXT);
+        INSERT INTO findings VALUES (1,'2026-11-06T20:00:00-05:00','https://nypost.com/a/b/c','https://i/x.jpg',
+        'nypost.com',1,'exact',0.99,0,'same');""")
+    db.commit()
+    db.close()
+    config.data_dir(tmp_path)
+    store = Store(tmp_path)
+    cols = {r[1] for r in store.db.execute("PRAGMA table_info(findings)")}
+    assert {"last_seen", "path_key", "thumb"} <= cols
+    fid, found = store.save_finding("https://nypost.com/a/b/c", "https://i/x.jpg", "nypost.com", 1, "exact", 0.99, 0, "same")
+    assert fid == 1 and found.startswith("2026-11-06")
+    assert "Summary of all checks" in render_summary(store, tmp_path)

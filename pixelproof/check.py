@@ -10,6 +10,7 @@ from .fingerprint import open_image, thumbnail_jpeg
 from .matcher import Query, match_images
 from .page import (domain_of, download_images, extract_image_urls, fetch_page, is_banned,
                    load_banned, session)
+from .sites import load_approvals, load_sisters, path_key
 from .store import Store, match_id, now
 
 
@@ -21,6 +22,9 @@ class Group:
     best: object                       # the strongest Candidate
     copies: list = field(default_factory=list)  # (Query, Candidate), largest copy first
     match_id: str = ""
+    found_at: str = ""                                # first time this page showed this photo
+    licensed: str | None = None                       # site or company that makes it licensed
+    elsewhere: list = field(default_factory=list)     # other pages where this photo was found before
 
     @property
     def main(self):
@@ -39,6 +43,16 @@ class CheckResult:
     skipped_small: int = 0
     failed: int = 0
     groups: list[Group] = field(default_factory=list)
+    sister_group: object = None                        # SisterGroup this site belongs to, if any
+    sister_pages: list = field(default_factory=list)   # same link ending on other sites
+
+    @property
+    def stolen(self) -> list[Group]:
+        return [g for g in self.groups if not g.licensed]
+
+    @property
+    def licensed(self) -> list[Group]:
+        return [g for g in self.groups if g.licensed]
 
     @property
     def matched(self) -> list[Query]:
@@ -132,14 +146,28 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
     res.groups = group_matches(queries)
 
     # Save one finding per image of ours, so it has a tracking ID (used later by Proof of Discovery).
+    key = path_key(res.page_url)
     for g in res.groups:
         q, _ = g.main
         others = [cq.source for cq, _ in g.copies[1:]]
         note = g.best.note + (f"; also at {len(others)} other image links on the page" if others else "")
         fid, found_at = store.save_finding(res.page_url or "", q.source, res.domain, g.image_id,
-                                           g.best.category, g.best.clip_sim, g.best.hash_dist, note)
-        g.match_id = match_id(fid, found_at)
+                                           g.best.category, g.best.clip_sim, g.best.hash_dist, note,
+                                           path_key=key, thumb=q.thumb or None, width=q.width, height=q.height)
+        g.match_id, g.found_at = match_id(fid, found_at), found_at
         for _, c in g.copies:
             c.match_id = g.match_id
+        g.elsewhere = store.other_findings(g.image_id, res.page_url or q.source)
+    if res.page_url:
+        store.save_page(res.page_url, res.domain, key, len(queries), len(res.groups))
+        if key:
+            res.sister_pages = [p for p in store.pages_with_key(key, res.page_url) if p["domain"] != res.domain]
     store.commit()
+
+    # Sister sites and licensed use (read fresh each time, so edits to the .txt files count right away).
+    sisters = load_sisters(data_dir, store)
+    approvals = load_approvals(data_dir, sisters)
+    res.sister_group = sisters.group_of(res.domain) if res.page_url else None
+    for g in res.groups:
+        g.licensed = approvals.licensed(g.row["photographer"], res.domain) if res.page_url else None
     return res
