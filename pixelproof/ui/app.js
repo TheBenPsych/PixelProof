@@ -616,6 +616,17 @@ function pollJob() {
     else if (lastJobState === "running") { lastJobState = j ? j.state : null; refresh(); }
   });
 }
+function copyLog() {
+  fetch("/api/joblog", {headers: {"X-PixelProof": TOKEN}}).then(function (r) { return r.text(); }).then(function (t) {
+    function fallback() {
+      var ta = el("textarea", {style: "position:fixed;left:-9999px"}); ta.value = t; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); toast("Details copied. Paste them anywhere with Ctrl+V."); } catch (e) { toast("Could not copy."); }
+      ta.remove();
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function () { toast("Details copied. Paste them anywhere with Ctrl+V."); }, fallback);
+    else fallback();
+  });
+}
 function renderJob(j) {
   var box = document.getElementById("job");
   if (!j || j.dismissed) { box.hidden = true; return; }
@@ -642,6 +653,7 @@ function renderJob(j) {
   det.addEventListener("toggle", function () { detailsOpen = det.open; });
   kids.push(det);
   var acts = el("div", {"class": "acts"});
+  acts.appendChild(el("button", {"class": "btn small", type: "button", text: "Copy details", onclick: copyLog}));
   if (running) acts.appendChild(el("button", {"class": "btn small", type: "button", text: "Stop", onclick: function () { api("/api/stop", {}); toast("Stopping…"); }}));
   var res = j.result || {};
   if (!running && j.kind === "crawl" && res.new_ids) {

@@ -143,6 +143,7 @@ class Job:
         self.kind, self.label = kind, label
         self.state = "running"           # running | done | error | stopped
         self.lines: list[str] = []
+        self.all_lines: list[str] = []
         self.done = self.total = self.found = 0
         self.result: dict = {}
         self.stop = False
@@ -151,8 +152,19 @@ class Job:
     def log(self, *parts):
         text = " ".join(str(p) for p in parts).strip()
         if text:
+            t = int(time.time() - self.started)
+            text = f"[{t // 3600}:{t // 60 % 60:02d}:{t % 60:02d}] {text}" if t >= 3600 else f"[{t // 60:02d}:{t % 60:02d}] {text}"
             self.lines.append(text)
             del self.lines[:-200]
+            self.all_lines.append(text)
+            del self.all_lines[:-20000]
+
+    def text(self) -> str:
+        """The whole log, for the Copy button."""
+        head = [f"PixelProof {config.VERSION} · {self.kind}: {self.label}",
+                f"Started {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.started))}, "
+                f"{self.state}, {round(time.time() - self.started)} seconds so far", ""]
+        return "\n".join(head + self.all_lines) + "\n"
 
     def as_dict(self):
         return {"kind": self.kind, "label": self.label, "state": self.state, "lines": self.lines[-60:],
@@ -447,9 +459,12 @@ class App:
             if big:
                 job.log(f"Skipping {len(big)} giant platforms that can't be crawled (like {', '.join(big[:3])}).")
 
+            timings = []   # (seconds, site, pages checked)
+
             def one(domain):
                 if job.stop:
                     return
+                t0 = time.time()
                 st = Store(self.data_dir)
                 st._clip_index, st._hash_index = main._clip_index, main._hash_index
                 counted = {"pages": 0, "matches": 0, "ids": 0}
@@ -479,17 +494,31 @@ class App:
                     job.done += 1
                     job.result["sites"] += 1
                     job.result["skipped"] += r.status == "skipped"
+                took = time.time() - t0
+                with lock:
+                    timings.append((took, domain, r.checked))
+                per = f", {took / r.checked:.1f}s per page" if r.checked else ""
+                took_s = f"{took:.1f}s" if took < 10 else f"{took:.0f}s"
                 if r.status == "error":
-                    job.log(f"{domain}: {r.note}")
+                    job.log(f"{domain}: {r.note} (after {took_s})")
                 elif r.status == "done":
-                    job.log(f"{domain}: done. {r.checked} page{'s' if r.checked != 1 else ''} checked, "
-                            f"{r.matches} of your images found.")
+                    job.log(f"{domain}: done in {took_s}. {r.checked} page{'s' if r.checked != 1 else ''} checked"
+                            f"{per}, {r.matches} of your images found.")
 
             with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
                 list(pool.map(one, targets))
             res = job.result
+            total = max(time.time() - job.started, 1)
             job.log(f"Finished: {res['sites']} sites, {res['pages']} pages checked, "
                     f"{len(res['new_ids'])} new matches.")
+            worked = [t for t in timings if t[2]]
+            took_all = f"{total:.0f} second{'s' if round(total) != 1 else ''}" if total < 120 else f"{total / 60:.1f} minutes"
+            job.log(f"Speed: {took_all} in all, {workers} sites at once, "
+                    f"{res['sites'] / total * 60:.1f} sites per minute, {res['pages'] / total * 60:.1f} pages per minute"
+                    + (f", {sum(t[0] for t in worked) / len(worked):.0f}s per site that had pages." if worked else "."))
+            slow = sorted(worked, reverse=True)[:5]
+            if slow and len(worked) > 5:
+                job.log("Slowest sites: " + ", ".join(f"{d} {t:.0f}s ({n} pages)" for t, d, n in slow))
             main.db.close()
 
         label = targets[0] if len(targets) == 1 else f"{len(targets)} sites"
@@ -885,6 +914,8 @@ def make_handler(app: App):
                 return self._json(app.state())
             if path == "/api/job":
                 return self._json(app.job.as_dict() if app.job else None)
+            if path == "/api/joblog":
+                return self._send(200, (app.job.text() if app.job else "").encode("utf-8"), "text/plain; charset=utf-8")
             if path == "/api/ping":
                 return self._json({"ok": True})
             return self._send(404, b"not found", "text/plain")

@@ -212,6 +212,10 @@ def test_crawler_sitemap_feed_robots(engine, tmp_path, lib):  # noqa: F811
         crawl = {r["domain"]: r for r in st["crawl"]}
         assert crawl["127.0.0.1"]["checked"] == 1 and crawl["google.com"]["status"] == "skipped"
         assert any("robots" in ln for ln in job["lines"])
+        assert any("done in" in ln and ln.startswith("[00:") for ln in job["lines"])
+        assert any(ln.split("] ", 1)[1].startswith("Speed:") for ln in job["lines"])
+        log = call(base, a.token, "/api/joblog").decode()
+        assert log.startswith("PixelProof") and "pages per minute" in log
         # running again only looks at new pages
         call(base, a.token, "/api/crawl", {"pages": 10})
         job = wait_job(base, a.token)
