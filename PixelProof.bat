@@ -24,6 +24,10 @@ echo     5   Show what is in my library
 echo     6   Open my reports folder
 echo     7   Edit my ban list
 echo     8   Check that everything works
+echo.
+echo     9   Approve a site for one photographer  (licensed use)
+echo    10   See everything found so far  (repeat copies, sister sites)
+echo    11   Edit my approved sites and sister-site groups
 echo     0   Quit
 echo.
 set "PICK="
@@ -36,6 +40,9 @@ if "%PICK%"=="5" goto status
 if "%PICK%"=="6" goto reports
 if "%PICK%"=="7" goto ban
 if "%PICK%"=="8" goto doctor
+if "%PICK%"=="9" goto approve
+if "%PICK%"=="10" goto summary
+if "%PICK%"=="11" goto lists
 if "%PICK%"=="0" exit /b 0
 goto menu
 
@@ -99,6 +106,23 @@ goto menu
 :ban
 "%VPY%" -m pixelproof status >nul
 start "" notepad "%~dp0data\banned.txt"
+goto menu
+
+:approve
+echo.
+"%VPY%" -m pixelproof approve
+pause
+goto menu
+
+:summary
+"%VPY%" -m pixelproof summary
+pause
+goto menu
+
+:lists
+"%VPY%" -m pixelproof status >nul
+start "" notepad "%~dp0data\approved.txt"
+start "" notepad "%~dp0data\sister-sites.txt"
 goto menu
 
 :doctor

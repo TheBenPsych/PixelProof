@@ -3,7 +3,7 @@
 Find where your images are being used online. PixelProof runs fully on your Windows PC.
 It never uploads your images anywhere.
 
-This is **step 1, the quick prototype**:
+This is the **prototype** (steps 1 and 2). **Step 1**:
 
 1. **Fingerprint your images.** Point it at a folder (it works with Google Drive for desktop).
    It reads each image once, makes a small "fingerprint", and remembers the photographer,
@@ -12,6 +12,20 @@ This is **step 1, the quick prototype**:
 2. **Check one page.** Paste a link. PixelProof downloads the pictures on that page, compares them
    with your library, and opens a report in your browser showing **ours vs theirs** side by side,
    with a match ID for each hit.
+
+**Step 2** adds three things:
+
+3. **Licensed sites per photographer.** Mark a site as approved for one photographer (menu option `9`).
+   Their matches there show as **Licensed** instead of stolen. Other photographers on that site still show as stolen.
+4. **Sister sites.** When two sites have a page with the same link ending, for example
+   `catfishtuscaloosa.com/ixp/993/p/anchor-tuscaloosa-apps-2027-chamber/` and
+   `wtug.com/ixp/993/p/anchor-tuscaloosa-apps-2027-chamber/`, PixelProof groups them as one company.
+   You can also name a company and list its sites in `sister-sites.txt`.
+5. **Repeat copies.** When the same photo of yours turns up on more than one page, the report says so and lists
+   the other pages. Checking the same page again keeps the same match ID and first-found date.
+
+Menu option `10` makes a **summary of everything found so far**: repeat copies, sister-site groups,
+totals per photographer and per site, and licensed uses.
 
 The crawler, the full desktop app and Proof of Discovery come in later steps.
 
@@ -45,6 +59,30 @@ Double-click **`PixelProof.bat`**. You get a menu:
 | `6` | Open the reports folder |
 | `7` | Edit your ban list (sites to skip, one per line) |
 | `8` | Check that everything works |
+| `9` | Approve a site for one photographer (licensed use) |
+| `10` | See everything found so far (repeat copies, sister sites, per photographer and per site) |
+| `11` | Edit `approved.txt` and `sister-sites.txt` in Notepad |
+
+When you check a **list of links** (option `4`), PixelProof opens the summary at the end
+instead of one browser tab per link. Each link's own report is still saved in the reports folder.
+
+## Approved sites and sister sites
+
+`data\approved.txt` (one line per photographer):
+
+```
+Yang = nypost.com
+Maya Chen = example.com, partner-site.org
+```
+
+`data\sister-sites.txt` (one line per company, only needed for groups PixelProof can't spot by itself):
+
+```
+Tuscaloosa radio group = catfishtuscaloosa.com, wtug.com
+```
+
+You can put a company name from `sister-sites.txt` in `approved.txt` to approve all of its sites at once.
+Changes count right away, even for matches found earlier.
 
 **Pasting a folder path:** in File Explorer, right-click the folder and choose **Copy as path**
 (on Windows 10, hold **Shift** while you right-click). In the black window, **right-click** to paste.
@@ -61,6 +99,8 @@ If you prefer typing, open `cmd` in the PixelProof folder and run:
 pixelproof index "G:\My Drive\Photographers\Maya Chen"
 pixelproof check https://example.com/some-article/
 pixelproof status
+pixelproof approve "Yang" nypost.com
+pixelproof summary
 pixelproof doctor
 ```
 
@@ -68,10 +108,13 @@ pixelproof doctor
 
 | File | What it is |
 |---|---|
-| `library.db` | One row per image: path, photographer, year, quarter, date, fingerprints, and every match found |
+| `library.db` | One row per image: path, photographer, year, quarter, date, fingerprints, every match found, and every page checked |
 | `clip.faiss`, `hash.faiss` | The fast search indexes (rebuilt automatically) |
 | `reports\` | Every check report, as a web page you can open again |
 | `banned.txt` | Sites to skip |
+| `approved.txt` | Sites licensed for one photographer |
+| `sister-sites.txt` | Groups of sites owned by one company |
+| `reports\summary.html` | Everything found so far (menu option 10) |
 | `models\` | The AI model, downloaded once |
 
 Roughly 2 KB per image, so about 2 GB per million images.

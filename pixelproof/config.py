@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "PixelProof"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # The app folder (the folder that holds install.bat). Data lives next to it in "data".
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -50,4 +50,7 @@ def data_dir(override: str | os.PathLike | None = None) -> Path:
             "# Lines starting with # are ignored.\n",
             encoding="utf-8",
         )
+    from .sites import make_templates  # approved.txt and sister-sites.txt
+
+    make_templates(path)
     return path

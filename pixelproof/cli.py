@@ -4,6 +4,8 @@
   pixelproof index "G:\\My Drive\\Photographers"   fingerprint your images
   pixelproof check https://example.com/page       check one page (or a .txt list of links, or a picture file)
   pixelproof status                     what is in your library
+  pixelproof approve "Yang" nypost.com  mark a site as licensed for one photographer
+  pixelproof summary                    everything found so far (repeat copies, sister sites)
 """
 
 from __future__ import annotations
@@ -136,18 +138,108 @@ def cmd_check(args, data_dir) -> int:
         print("Run option 1 (Fingerprint a folder) on your images folder again, then check this page.")
         return 1
     store.load_indexes(clip.dim)
-    any_match = False
-    for target in _targets(args.targets):
+    targets = _targets(args.targets)
+    many = len(targets) > 1
+    for target in targets:
         print(f"\nChecking {target}")
         result = check_target(target, store, clip, data_dir)
         path = write_report(result, data_dir)
-        n = len(result.groups)
-        any_match |= n > 0
         if not result.error and not result.banned:
-            print(f"  {len(result.queries)} pictures checked, {n} of your images found.")
+            line = f"  {len(result.queries)} pictures checked, {len(result.stolen)} of your images found."
+            if result.licensed:
+                line += f" ({len(result.licensed)} more on a licensed site.)"
+            print(line)
+            repeats = sum(1 for g in result.stolen if g.elsewhere)
+            if repeats:
+                print(f"  {repeats} of them were already found on other pages too (repeat copies).")
+            if result.sister_group:
+                print(f"  Sister site: part of \"{result.sister_group.name}\".")
         print(f"  Report: {path}")
+        if not args.no_open and not many:
+            webbrowser.open(path.as_uri())
+    if many:
+        from .summary import write_summary
+
+        path = write_summary(store, data_dir)
+        print(f"\nChecked {len(targets)} links. Summary of everything found so far: {path}")
         if not args.no_open:
             webbrowser.open(path.as_uri())
+    return 0
+
+
+def cmd_summary(args, data_dir) -> int:
+    from .summary import write_summary
+    from .store import Store
+
+    store = Store(data_dir)
+    path = write_summary(store, data_dir)
+    print(f"Summary: {path}")
+    if not args.no_open:
+        webbrowser.open(path.as_uri())
+    return 0
+
+
+def _ask(prompt: str) -> str:
+    try:
+        return input(prompt).strip().strip('"').strip()
+    except EOFError:
+        return ""
+
+
+def cmd_approve(args, data_dir) -> int:
+    from .sites import _person_key, add_approval, clean_site, load_approvals, load_sisters
+    from .store import Store
+
+    store = Store(data_dir)
+    people = [r[0] for r in store.db.execute(
+        "SELECT DISTINCT photographer FROM images WHERE photographer IS NOT NULL ORDER BY photographer COLLATE NOCASE")]
+    who = (args.photographer or "").strip()
+    if not who:
+        if people:
+            print("Photographers in your library:")
+            for i, p in enumerate(people, 1):
+                print(f"  {i:>3}   {p}")
+        who = _ask("\n  Type the photographer's number or name: ")
+    if who.isdigit() and people and 1 <= int(who) <= len(people):
+        who = people[int(who) - 1]
+    if not who:
+        print("No photographer given, nothing changed.")
+        return 1
+    if people and who.lower() not in {p.lower() for p in people}:
+        print(f"Note: \"{who}\" is not a photographer in your library yet (check the spelling).")
+    else:
+        who = next((p for p in people if p.lower() == who.lower()), who)
+
+    raw = args.sites or [_ask("  Paste the site or any link from it (for example nypost.com): ")]
+    sites = [clean_site(x) for x in raw if clean_site(x)]
+    if not sites:
+        print("No site given, nothing changed.")
+        return 1
+    sisters = load_sisters(data_dir, store)
+    to_add = []
+    for site in sites:
+        to_add.append(site)
+        g = sisters.group_of(site)
+        if g and not args.yes:
+            others = [d for d in g.domains if d != site]
+            print(f"\n  {site} is a sister site of: {', '.join(others)}  (\"{g.name}\")")
+            ans = _ask("  Approve all of these sites for this photographer too? Type Y or N: ").lower()
+            if ans.startswith("y"):
+                to_add.extend(others)
+    to_add = list(dict.fromkeys(to_add))
+    if not args.yes:
+        print(f"\n  Approve for {who}: {', '.join(to_add)}")
+        print("  Their matches there will show as Licensed instead of stolen.")
+        if not _ask("  Are you sure? Type Y or N: ").lower().startswith("y"):
+            print("Nothing changed.")
+            return 1
+    new = add_approval(data_dir, who, to_add)
+    if new:
+        print(f"Done. Approved for {who}: {', '.join(new)}")
+    else:
+        print(f"Those sites were already approved for {who}.")
+    rules = load_approvals(data_dir, sisters).rules
+    print(f"All sites approved for {who}: {', '.join(rules.get(_person_key(who), []))}")
     return 0
 
 
@@ -191,9 +283,18 @@ def main(argv=None) -> int:
     s = sub.add_parser("status", help="show what is in your library")
     s.add_argument("--errors", action="store_true")
 
+    a = sub.add_parser("approve", help="mark a site as licensed for one photographer")
+    a.add_argument("photographer", nargs="?")
+    a.add_argument("sites", nargs="*")
+    a.add_argument("--yes", action="store_true", help="don't ask to confirm")
+
+    m = sub.add_parser("summary", help="everything found so far: repeat copies, sister sites, licensed uses")
+    m.add_argument("--no-open", action="store_true")
+
     args = p.parse_args(argv)
     data_dir = config.data_dir(args.data)
-    handler = {"doctor": cmd_doctor, "index": cmd_index, "check": cmd_check, "status": cmd_status}[args.cmd]
+    handler = {"doctor": cmd_doctor, "index": cmd_index, "check": cmd_check, "status": cmd_status,
+               "approve": cmd_approve, "summary": cmd_summary}[args.cmd]
     try:
         return handler(args, data_dir)
     except KeyboardInterrupt:
