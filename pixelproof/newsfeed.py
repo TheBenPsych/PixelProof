@@ -138,11 +138,11 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
                  if (not us_only or is_us(s)) and not is_banned(u, banned)]
         log(f"News list {stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]} UTC: "
             f"{len(items)} articles to check.")
-        for b in range(0, len(items), 48):
+        for b in range(0, len(items), 128):
             if should_stop():
                 break
-            batch = items[b:b + 48]
-            with ThreadPoolExecutor(max_workers=8) as pool:
+            batch = items[b:b + 128]
+            with ThreadPoolExecutor(max_workers=32) as pool:
                 datas = list(pool.map(lambda it: _download(sess, it[2]), batch))
             imgs, keep = [], []
             for it, data in zip(batch, datas):

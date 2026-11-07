@@ -383,7 +383,7 @@ class App:
 
         return self.start_job("index", folder, work)
 
-    def crawl(self, sites: list[str] | None, pages_per_site: int = 20, workers: int = 4) -> dict:
+    def crawl(self, sites: list[str] | None, pages_per_site: int = 20, workers: int = 12) -> dict:
         """Visits the watch-list sites (or just `sites`) and checks their newest pages."""
         from concurrent.futures import ThreadPoolExecutor
 

@@ -375,7 +375,7 @@ function crawlView(main) {
   main.appendChild(el("div", {"class": "head"}, [el("div", {}, [el("h1", {text: "Crawler"}),
     el("p", {text: "Visits the sites on your watch list, finds their newest pages and checks every picture. Matches show up in Review."})])]));
   var per = el("select", {"aria-label": "Pages per site"}, [10, 20, 50, 100].map(function (n) { return el("option", {value: String(n), text: n + " newest pages per site", selected: n === 20 ? true : null}); }));
-  function est() { var mins = Math.round(crawlable.length * Number(per.value) * 3 / 4 / 60); return mins < 90 ? "about " + Math.max(1, mins) + " minutes" : "about " + Math.round(mins / 60) + " hours"; }
+  function est() { var mins = Math.round(crawlable.length * Number(per.value) * 3 / 12 / 60); return mins < 90 ? "about " + Math.max(1, mins) + " minutes" : "about " + Math.round(mins / 60) + " hours"; }
   var estEl = el("span", {"class": "muted", text: ""}); function upd() { estEl.textContent = "Takes " + est() + ". You can stop any time; next time it carries on with sites it hasn't visited yet."; }
   per.addEventListener("change", upd); upd();
   main.appendChild(el("div", {"class": "card addfolder"}, [
@@ -399,7 +399,7 @@ function crawlView(main) {
       el("button", {"class": "btn ink big", type: "button", text: "Check the news", onclick: function () {
         api("/api/news", {hours: Number(hrs.value), us_only: us.checked}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
       }})]),
-    el("span", {"class": "muted", text: "About 1,000 to 3,000 US articles per hour. 3 hours takes roughly 10 to 20 minutes. News lists it already read are skipped next time."})
+    el("span", {"class": "muted", text: "About 1,000 to 3,000 US articles per hour. 3 hours takes roughly 5 to 10 minutes. News lists it already read are skipped next time."})
   ]));
   if (!watch.length) { main.appendChild(el("div", {"class": "empty", html: "<b>Your watch list is empty</b>Add sites in Site lists (you can import a .txt file)."})); return; }
   var order = watch.slice().sort(function (a, b) { return (stolen[b] || 0) - (stolen[a] || 0) || (hits[b] || 0) - (hits[a] || 0) || ((info[b] || {}).last_crawl || "").localeCompare((info[a] || {}).last_crawl || "") || a.localeCompare(b); });
