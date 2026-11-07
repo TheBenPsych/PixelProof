@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS pages (
     first_checked TEXT, last_checked TEXT, pictures INTEGER, found INTEGER
 );
 CREATE INDEX IF NOT EXISTS pages_path_key ON pages(path_key);
+CREATE INDEX IF NOT EXISTS pages_domain ON pages(domain, last_checked);
+CREATE TABLE IF NOT EXISTS crawl_sites (
+    domain TEXT PRIMARY KEY, last_crawl TEXT, status TEXT, note TEXT,
+    found INTEGER, checked INTEGER, matches INTEGER
+);
 """
 
 # Columns added after step 1. Old libraries get them the first time step 2 opens them.

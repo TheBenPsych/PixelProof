@@ -86,7 +86,10 @@ def _is_url(s: str) -> bool:
     return s.lower().startswith(("http://", "https://"))
 
 
-def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckResult:
+def check_target(target: str, store: Store, clip, data_dir, log=print, seen_images: set | None = None,
+                 sess=None) -> CheckResult:
+    """seen_images (used by the crawler): picture links already checked and not ours. They are skipped,
+    and pictures on this page that turn out not to be ours are added to it."""
     target = target.strip().strip('"')
     res = CheckResult(target=target, checked_at=now())
     sources: list[tuple[str, bytes | str | None, str]] = []  # (label, bytes or path, error)
@@ -98,7 +101,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
             res.banned = True
             log(f"{res.domain} is on your ban list, so it was not checked.")
             return res
-        sess = session()
+        sess = sess or session()
         try:
             final_url, html, direct = fetch_page(target, sess)
         except Exception as e:
@@ -111,6 +114,12 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
         else:
             page_html = html.encode("utf-8", "replace")
             urls = extract_image_urls(html, final_url)
+            if seen_images is not None:
+                known = len(urls)
+                urls = [u for u in urls if u not in seen_images]
+                known -= len(urls)
+                if known:
+                    log(f"Skipping {known} pictures already checked on other pages (logos and the like).")
             log(f"Found {len(urls)} pictures on the page. Downloading ...")
             sources.extend(download_images(urls, final_url, sess))
     elif os.path.isfile(target):
@@ -149,6 +158,9 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
         for q, matches in zip(queries[start:start + 32], match_images(images[start:start + 32], store, clip)):
             q.matches = matches
     res.queries = queries
+    if seen_images is not None and len(seen_images) < 500_000:
+        hit = {q.source for q in queries if q.matches}
+        seen_images.update(label for label, _, _ in sources if label not in hit)
 
     res.groups = group_matches(queries)
 

@@ -84,6 +84,12 @@ def _rewrite_rules(path: Path, header: str, rules: list[tuple[str, list[str]]]) 
     os.replace(tmp, path)
 
 
+def _too_big():
+    from .crawl import TOO_BIG
+
+    return TOO_BIG
+
+
 # ------------------------------------------------------------------ "Browse..." choosers
 
 def _fix_tcl_paths() -> None:
@@ -173,6 +179,8 @@ class App:
         self.clip_lock = threading.Lock()
         self.last_seen = time.time()
         self.bye_at = 0.0
+        self.base_urls: dict[str, str] = {}   # tests: domain -> http://host:port
+        self.crawl_delay = 1.0                # seconds between pages on one site (be polite)
 
     # ---------- AI model (loaded once, the first time it is needed) ----------
     def get_clip(self, job: Job):
@@ -249,6 +257,8 @@ class App:
                 "approved": approved,
                 "sisters": groups,
                 "watch": _read_sites(self.data_dir / WATCH_FILE),
+                "crawl": [dict(r) for r in st.db.execute("SELECT * FROM crawl_sites")],
+                "too_big": sorted(_too_big()),
                 "job": self.job.as_dict() if self.job else None,
                 "device": self.clip.device_label() if self.clip else None,
                 "data_dir": str(self.data_dir),
@@ -366,6 +376,100 @@ class App:
             store.db.close()
 
         return self.start_job("index", folder, work)
+
+    def crawl(self, sites: list[str] | None, pages_per_site: int = 20, workers: int = 4) -> dict:
+        """Visits the watch-list sites (or just `sites`) and checks their newest pages."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        from .cli import _library_model
+        from .crawl import TOO_BIG, crawl_site, save_site
+        from .store import Store
+
+        with self.lock:
+            if self.store.count() == 0:
+                return {"ok": False, "error": "Your library is empty. Add a folder of your images first (My images)."}
+            watch = _read_sites(self.data_dir / WATCH_FILE)
+            done = {r[0]: r[1] or "" for r in self.store.db.execute("SELECT domain, last_crawl FROM crawl_sites")}
+        targets = [s for s in (sites or watch) if s]
+        if not targets:
+            return {"ok": False, "error": "Your watch list is empty. Add sites in Site lists first."}
+        if not sites:  # sites never crawled first, then the ones crawled longest ago
+            targets.sort(key=lambda d: done.get(d, ""))
+        pages_per_site = max(1, min(int(pages_per_site or 20), 500))
+        factory = self.clip_factory
+
+        def work(job: Job):
+            clip = self.get_clip(job)
+            main = Store(self.data_dir)
+            if _library_model(main) != clip.name:
+                job.state = "error"
+                job.log("Your library needs fresh fingerprints first. Open My images and add your folder again.")
+                return
+            main.load_indexes(clip.dim)
+            lock = threading.Lock()
+
+            class SharedClip:  # one AI model on the graphics card, used by one site at a time
+                dim, name, device = clip.dim, clip.name, getattr(clip, "device", "")
+                preprocess = staticmethod(clip.preprocess)
+
+                def embed(self, images):
+                    with lock:
+                        return clip.embed(images)
+
+                def embed_tensors(self, tensors):
+                    with lock:
+                        return clip.embed_tensors(tensors)
+
+                def device_label(self):
+                    return clip.device_label()
+
+            shared = SharedClip()
+            seen: set = set()
+            job.total = len(targets)
+            job.result = {"new_ids": [], "sites": 0, "pages": 0, "matches": 0, "skipped": 0}
+            big = [d for d in targets if d in TOO_BIG]
+            if big:
+                job.log(f"Skipping {len(big)} giant platforms that can't be crawled (like {', '.join(big[:3])}).")
+
+            def one(domain):
+                if job.stop:
+                    return
+                st = Store(self.data_dir)
+                st._clip_index, st._hash_index = main._clip_index, main._hash_index
+                try:
+                    r = crawl_site(domain, st, shared, self.data_dir, pages_per_site=pages_per_site,
+                                   log=job.log, should_stop=lambda: job.stop, seen_images=seen,
+                                   base_url=self.base_urls.get(domain), delay=self.crawl_delay)
+                except Exception as e:  # one broken site never stops the run
+                    from .crawl import SiteResult
+
+                    r = SiteResult(domain, "error", f"{type(e).__name__}: {e}"[:200])
+                save_site(st, r)
+                st.db.close()
+                with lock:
+                    job.done += 1
+                    res = job.result
+                    res["sites"] += 1
+                    res["pages"] += r.checked
+                    res["matches"] += r.matches
+                    res["skipped"] += r.status == "skipped"
+                    res["new_ids"] += r.new_ids
+                    job.found = len(res["new_ids"])
+                if r.status == "error":
+                    job.log(f"{domain}: {r.note}")
+                elif r.status == "done":
+                    job.log(f"{domain}: done. {r.checked} page{'s' if r.checked != 1 else ''} checked, "
+                            f"{r.matches} of your images found.")
+
+            with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                list(pool.map(one, targets))
+            res = job.result
+            job.log(f"Finished: {res['sites']} sites, {res['pages']} pages checked, "
+                    f"{len(res['new_ids'])} new matches.")
+            main.db.close()
+
+        label = targets[0] if len(targets) == 1 else f"{len(targets)} sites"
+        return self.start_job("crawl", label, work)
 
     def set_status(self, ids, status) -> dict:
         with self.lock:
@@ -677,6 +781,8 @@ def route(app: App, path: str, b: dict) -> dict:
     sites = b.get("sites") or ([b["site"]] if b.get("site") else [])
     if path == "/api/check":
         return app.check(b.get("targets") or [b.get("target", "")])
+    if path == "/api/crawl":
+        return app.crawl(b.get("sites") or None, int(b.get("pages") or 20))
     if path == "/api/index":
         return app.index(b.get("folder", ""))
     if path == "/api/bye":
@@ -758,8 +864,10 @@ def open_window(url: str) -> None:
     webbrowser.open(url)
 
 
-def serve(data_dir: Path, open_app=True, port=0, clip_factory=None) -> None:
+def serve(data_dir: Path, open_app=True, port=0, clip_factory=None, configure=None) -> None:
     app = App(data_dir, clip_factory=clip_factory)
+    if configure:
+        configure(app)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
     url = f"http://127.0.0.1:{server.server_port}/?t={app.token}"
     print(f"PixelProof {config.VERSION} is running.")

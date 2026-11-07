@@ -91,13 +91,14 @@ var ICONS = {
   ph: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
   sites: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c3 3 3 15 0 18c-3-3-3-15 0-18"/>',
   lists: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
-  lib: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>'
+  lib: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
+  crawl: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>'
 };
 
 /* ---------- nav ---------- */
 function renderNav() {
   var nav = document.getElementById("nav"); nav.innerHTML = "";
-  [["home", "Home"], ["review", "Review"], ["ph", "Photographers"], ["sites", "Sites"], ["lists", "Site lists"], ["lib", "My images"]].forEach(function (n) {
+  [["home", "Home"], ["review", "Review"], ["ph", "Photographers"], ["sites", "Sites"], ["crawl", "Crawler"], ["lists", "Site lists"], ["lib", "My images"]].forEach(function (n) {
     var b = el("button", {type: "button", "aria-current": S.view === n[0] ? "page" : null, onclick: function () { go(n[0], n[0] === "review" ? {cur: null} : null); }});
     b.innerHTML = svg(ICONS[n[0]]); b.appendChild(el("span", {text: n[1]}));
     if (n[0] === "review") { var q = queue().length; if (q) b.appendChild(el("span", {"class": "count", text: String(q)})); }
@@ -357,6 +358,49 @@ function sitesView(main) {
   if (S.site && doms[S.site]) { main.appendChild(el("h2", {"class": "section-title", text: "Your images on " + S.site})); main.appendChild(grid(doms[S.site])); }
 }
 
+
+/* ---------- CRAWLER ---------- */
+function crawlView(main) {
+  var d = S.data, watch = d.watch, big = {}; d.too_big.forEach(function (x) { big[x] = 1; });
+  var info = {}; (d.crawl || []).forEach(function (r) { info[r.domain] = r; });
+  var crawlable = watch.filter(function (w) { return !big[w]; });
+  var hits = {}; F().forEach(function (m) { if (m.page_url && shown(m)) hits[m.domain] = (hits[m.domain] || 0) + 1; });
+  main.appendChild(el("div", {"class": "head"}, [el("div", {}, [el("h1", {text: "Crawler"}),
+    el("p", {text: "Visits the sites on your watch list, finds their newest pages and checks every picture. Matches show up in Review."})])]));
+  var per = el("select", {"aria-label": "Pages per site"}, [10, 20, 50, 100].map(function (n) { return el("option", {value: String(n), text: n + " newest pages per site", selected: n === 20 ? true : null}); }));
+  function est() { var mins = Math.round(crawlable.length * Number(per.value) * 3 / 4 / 60); return mins < 90 ? "about " + Math.max(1, mins) + " minutes" : "about " + Math.round(mins / 60) + " hours"; }
+  var estEl = el("span", {"class": "muted", text: ""}); function upd() { estEl.textContent = "Takes " + est() + ". You can stop any time; next time it carries on with sites it hasn't visited yet."; }
+  per.addEventListener("change", upd); upd();
+  main.appendChild(el("div", {"class": "card addfolder"}, [
+    el("h2", {text: "Crawl my watch list"}),
+    el("p", {text: plural(watch.length, "site") + " on your watch list. " + (watch.length - crawlable.length ? plural(watch.length - crawlable.length, "giant platform") + " (like Google or YouTube) can't be crawled and will be skipped. " : "") +
+      "Pages it checked in the last 7 days are skipped, so running it again only looks at new pages."}),
+    el("div", {"class": "urlrow"}, [el("div", {"class": "lcard", style: "padding:0;flex:1;min-width:220px"}, [el("div", {"class": "add"}, [per])]),
+      el("button", {"class": "btn ink big", type: "button", text: "Start crawling", disabled: crawlable.length ? null : true, onclick: function () {
+        api("/api/crawl", {pages: Number(per.value)}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
+      }})]),
+    estEl
+  ]));
+  if (!watch.length) { main.appendChild(el("div", {"class": "empty", html: "<b>Your watch list is empty</b>Add sites in Site lists (you can import a .txt file)."})); return; }
+  var order = watch.slice().sort(function (a, b) { return (hits[b] || 0) - (hits[a] || 0) || ((info[b] || {}).last_crawl || "").localeCompare((info[a] || {}).last_crawl || "") || a.localeCompare(b); });
+  var tb = el("tbody");
+  order.forEach(function (w) {
+    var r = info[w] || {};
+    var status = big[w] ? "Too big to crawl" : r.status === "error" ? "Problem: " + r.note : r.status === "skipped" ? r.note : r.last_crawl ? r.note : "Not crawled yet";
+    tb.appendChild(el("tr", {"class": hits[w] ? "click" : null, onclick: hits[w] ? function () { go("sites", {site: w}); } : null}, [
+      el("td", {}, [el("span", {"class": "dom", text: w})]),
+      el("td", {text: r.last_crawl ? when(r.last_crawl, true) : "–"}),
+      el("td", {"class": "n", text: r.checked != null ? String(r.checked) : "–"}),
+      el("td", {"class": "n", text: hits[w] ? String(hits[w]) : "–"}),
+      el("td", {"class": "muted", style: "font-size:12.5px", text: status}),
+      el("td", {style: "text-align:right;white-space:nowrap"}, big[w] ? [] : [el("button", {"class": "btn small", type: "button", text: "Crawl now", onclick: function (e) {
+        e.stopPropagation(); api("/api/crawl", {sites: [w], pages: Number(per.value)}).then(function (x) { if (x.ok === false) return toast(x.error); pollJob(); });
+      }})])
+    ]));
+  });
+  main.appendChild(el("div", {"class": "tablewrap"}, [el("table", {}, [el("thead", {}, [el("tr", {}, ["Site", "Last crawled", "Pages checked", "Your images found", "Last result", ""].map(function (h) { return el("th", {text: h}); }))]), tb])]));
+}
+
 /* ---------- SITE LISTS ---------- */
 function listsView(main) {
   var d = S.data;
@@ -554,7 +598,9 @@ function renderJob(j) {
   if (!j || j.dismissed) { box.hidden = true; return; }
   box.hidden = false; box.innerHTML = "";
   var running = j.state === "running";
-  var title = j.kind === "check" ? (running ? "Checking " + j.label : "Checked " + j.label) : (running ? "Fingerprinting your images" : "Fingerprinting finished");
+  var title = j.kind === "check" ? (running ? "Checking " + j.label : "Checked " + j.label)
+    : j.kind === "crawl" ? (running ? "Crawling " + j.label : "Crawl finished")
+    : (running ? "Fingerprinting your images" : "Fingerprinting finished");
   if (j.state === "error") title = "That did not work";
   if (j.state === "stopped") title = "Stopped";
   var last = j.lines.length ? j.lines[j.lines.length - 1] : "Starting…";
@@ -563,6 +609,7 @@ function renderJob(j) {
     running ? null : el("button", {"class": "x", type: "button", "aria-label": "Close", text: "×", onclick: function () { box.hidden = true; }})])];
   if (running) {
     kids.push(el("div", {"class": "bar" + (j.total ? "" : " indet")}, [el("i", {style: "width:" + pct + "%"})]));
+    if (j.kind === "crawl" && j.total && j.result) kids.push(el("div", {"class": "line", style: "color:var(--ink)", text: j.done + " of " + plural(j.total, "site") + " · " + plural(j.result.pages || 0, "page") + " checked · " + plural(j.found, "new match", "new matches")}));
     if (j.kind === "index" && j.total) kids.push(el("div", {"class": "line", text: j.done.toLocaleString() + " of " + j.total.toLocaleString() + " new images (" + pct + "%)"}));
   }
   kids.push(el("div", {"class": "line", text: last}));
@@ -570,6 +617,10 @@ function renderJob(j) {
   var acts = el("div", {"class": "acts"});
   if (running) acts.appendChild(el("button", {"class": "btn small", type: "button", text: "Stop", onclick: function () { api("/api/stop", {}); toast("Stopping…"); }}));
   var res = j.result || {};
+  if (!running && j.kind === "crawl" && res.new_ids) {
+    kids.push(el("div", {"class": "line", style: "color:var(--ink);font-weight:600", text: plural(res.pages || 0, "page") + " checked on " + plural(res.sites || 0, "site") + " · " + (res.new_ids.length ? plural(res.new_ids.length, "new match", "new matches") : "no new matches")}));
+    if (res.new_ids.length) acts.appendChild(el("button", {"class": "btn ink small", type: "button", text: "Review " + plural(res.new_ids.length, "new match", "new matches"), onclick: function () { box.hidden = true; go("review", {cur: res.new_ids[0]}); }}));
+  }
   if (!running && j.kind === "check" && res.banned) {
     kids.push(el("div", {"class": "line", style: "color:var(--ink)", text: res.domain + " is on your ban list, so it was not checked."}));
   } else if (!running && j.kind === "check" && res.ids && res.ids.length) {
@@ -590,7 +641,7 @@ function render() {
   if (!S.data) return;
   renderNav();
   var main = document.getElementById("main"); main.innerHTML = "";
-  ({home: home, review: review, ph: photographersView, sites: sitesView, lists: listsView, lib: libView}[S.view] || home)(main);
+  ({home: home, review: review, ph: photographersView, sites: sitesView, crawl: crawlView, lists: listsView, lib: libView}[S.view] || home)(main);
 }
 
 document.addEventListener("keydown", function (e) {

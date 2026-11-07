@@ -176,3 +176,71 @@ def test_window_closing_stops_the_engine(lib, monkeypatch):  # noqa: F811
     t0 = time.time()
     appmod.serve(data, open_app=True)
     assert time.time() - t0 < 10
+
+
+def test_crawler_sitemap_feed_robots(engine, tmp_path, lib):  # noqa: F811
+    """Two sites: one with a sitemap (and a page robots.txt forbids), one with only an RSS feed."""
+    a, base, _, data = engine
+    root, files, _ = lib
+    from test_pixelproof import _serve
+
+    site = tmp_path / "crawl"
+    def art(path, src):
+        d = site / path
+        d.mkdir(parents=True)
+        Image.open(files[src]).resize((400, 300)).save(d / "p.jpg", quality=70)
+        (d / "index.html").write_text("<img src='p.jpg'>")
+    art("news/2026/maya-story", "MayaChen_2026-02-14_0031.jpg")
+    art("private/secret-story", "LO 04-03-2026 shoot.png")
+    (site / "index.html").write_text("<a href='/news/2026/maya-story/'>x</a>")
+    srv = _serve(site)
+    port = srv.server_port
+    (site / "robots.txt").write_text(f"User-agent: *\nDisallow: /private/\nSitemap: http://127.0.0.1:{port}/sitemap.xml\n")
+    (site / "sitemap.xml").write_text(
+        "<urlset>" + "".join(f"<url><loc>http://127.0.0.1:{port}/{p}/</loc><lastmod>2026-11-01</lastmod></url>"
+                             for p in ("news/2026/maya-story", "private/secret-story", "tag/photos")) + "</urlset>")
+    try:
+        call(base, a.token, "/api/watch", {"sites": ["127.0.0.1", "google.com"]})
+        a.base_urls = {"127.0.0.1": f"http://127.0.0.1:{port}"}
+        a.crawl_delay = 0
+        assert call(base, a.token, "/api/crawl", {"pages": 10})["ok"]
+        job = wait_job(base, a.token)
+        assert job["state"] == "done", job["lines"]
+        assert job["result"]["pages"] == 1 and len(job["result"]["new_ids"]) == 1   # private page skipped
+        assert job["result"]["skipped"] == 1                                          # google.com
+        st = call(base, a.token, "/api/state")
+        crawl = {r["domain"]: r for r in st["crawl"]}
+        assert crawl["127.0.0.1"]["checked"] == 1 and crawl["google.com"]["status"] == "skipped"
+        assert any("robots" in ln for ln in job["lines"])
+        # running again only looks at new pages
+        call(base, a.token, "/api/crawl", {"pages": 10})
+        job = wait_job(base, a.token)
+        assert job["result"]["pages"] == 0
+        assert "no new pages" in {r["domain"]: r for r in call(base, a.token, "/api/state")["crawl"]}["127.0.0.1"]["note"]
+    finally:
+        srv.shutdown()
+
+
+def test_feed_parsing():
+    from pixelproof.crawl import SiteCrawler
+
+    class FakeSess:
+        def __init__(self, pages):
+            self.pages = pages
+
+        def get(self, url, **k):
+            class R:
+                pass
+            r = R()
+            r.status_code = 200 if url in self.pages else 404
+            r.content = self.pages.get(url, "").encode()
+            r.url, r.encoding = url, "utf-8"
+            return r
+
+    rss = ("<rss><channel><item><link>https://site.com/2026/a-story</link><pubDate>Fri, 06 Nov 2026 10:00:00 GMT</pubDate></item>"
+           "<item><link>https://site.com/2026/older</link><pubDate>Mon, 02 Nov 2026 10:00:00 GMT</pubDate></item>"
+           "<item><link>https://other.com/x/y</link></item></channel></rss>")
+    sc = SiteCrawler("site.com", sess=FakeSess({"https://site.com/": "<html></html>", "https://site.com/feed": rss}), delay=0)
+    assert sc.start()
+    pages, how = sc.find_pages(10)
+    assert how == "news feed" and pages == ["https://site.com/2026/a-story", "https://site.com/2026/older"]

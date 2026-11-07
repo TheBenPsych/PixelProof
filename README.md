@@ -11,6 +11,7 @@ It never uploads your images anywhere.
 | **Review** | Each match shows **ours vs theirs** side by side (or **Swipe** to slide between them). Press **Y** (stolen), **N** (not a match) or **→** (skip). |
 | **Photographers** | Every photographer from your folders, with their matches, filtered by year and quarter. |
 | **Sites** | Every site where your images turned up. Sister sites (one company) are grouped. |
+| **Crawler** | Visits every site on your watch list, finds its newest pages and checks every picture. Matches land in Review. |
 | **Site lists** | Banned sites, sites approved for one photographer (licensed), sister-site companies, and sites to watch. Import a list from a file. |
 | **My images** | Add a folder of your images (fingerprinting), with a progress bar and a Stop button. |
 
@@ -30,7 +31,18 @@ On every match you can:
 When you close the app window, PixelProof stops by itself a few seconds later.
 The old black-window menu is still there as `PixelProof (text menu).bat`.
 
-Coming next: the crawler that visits the sites on your watch list.
+### The crawler
+
+Put sites on your watch list (**Site lists**, or **Import site list** with a .txt file), then open **Crawler**,
+pick how many of the newest pages to check per site, and press **Start crawling**.
+
+- It finds each site's newest pages from its sitemap or news feed (or its home page if it has neither).
+- It follows each site's robots.txt and waits a moment between pages, so it is polite to the sites.
+- Pages it checked in the last 7 days are skipped, so the next run only looks at new pages.
+- Pictures that appear on many pages (logos, ads) are only checked once per run.
+- Giant platforms like Google, YouTube or Facebook are skipped; use **Check one page** there.
+- Sites built entirely with JavaScript may show few pictures; that is a known limit for now.
+- You can stop any time and start again later.
 
 ---
 
