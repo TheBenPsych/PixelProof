@@ -17,7 +17,11 @@ LAZY_ATTRS = ("src", "data-src", "data-lazy-src", "data-original", "data-full", 
 def session():
     import requests
 
+    from requests.adapters import HTTPAdapter
+
     s = requests.Session()
+    s.mount("https://", HTTPAdapter(pool_connections=32, pool_maxsize=32))
+    s.mount("http://", HTTPAdapter(pool_connections=32, pool_maxsize=32))
     s.headers.update({"User-Agent": config.USER_AGENT, "Accept-Language": "en-US,en;q=0.9",
                       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"})
     return s
@@ -119,13 +123,13 @@ def fetch_page(url: str, sess=None) -> tuple[str, str, bytes | None]:
     return r.url, r.text, None
 
 
-def download_images(urls: list[str], referer: str, sess=None, workers: int = 6) -> list[tuple[str, bytes | None, str]]:
+def download_images(urls: list[str], referer: str, sess=None, workers: int = 16) -> list[tuple[str, bytes | None, str]]:
     """Returns (url, bytes or None, error) in the same order."""
     sess = sess or session()
 
     def one(u):
         try:
-            with sess.get(u, timeout=30, stream=True, headers={"Referer": referer}) as r:
+            with sess.get(u, timeout=(6, 15), stream=True, headers={"Referer": referer}) as r:
                 r.raise_for_status()
                 data = b""
                 for chunk in r.iter_content(65536):

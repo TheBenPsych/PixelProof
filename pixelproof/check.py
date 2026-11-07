@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 from . import config
@@ -48,6 +49,9 @@ class CheckResult:
     groups: list[Group] = field(default_factory=list)
     sister_group: object = None                        # SisterGroup this site belongs to, if any
     sister_pages: list = field(default_factory=list)   # same link ending on other sites
+    t_page: float = 0.0         # seconds: opening the page
+    t_pictures: float = 0.0     # seconds: downloading its pictures
+    t_compare: float = 0.0      # seconds: reading the pictures and comparing them with your library
 
     @property
     def stolen(self) -> list[Group]:
@@ -102,6 +106,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
             log(f"{res.domain} is on your ban list, so it was not checked.")
             return res
         sess = sess or session()
+        t0 = time.time()
         try:
             final_url, html, direct = fetch_page(target, sess)
         except Exception as e:
@@ -109,6 +114,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
             log(res.error)
             return res
         res.page_url, res.domain = final_url, domain_of(final_url)
+        res.t_page = time.time() - t0
         if direct is not None:
             sources.append((final_url, direct, ""))
         else:
@@ -121,7 +127,9 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
                 if known:
                     log(f"Skipping {known} pictures already checked on other pages (logos and the like).")
             log(f"Found {len(urls)} pictures on the page. Downloading ...")
+            t0 = time.time()
             sources.extend(download_images(urls, final_url, sess))
+            res.t_pictures = time.time() - t0
     elif os.path.isfile(target):
         res.page_url, res.domain = "", "file on this PC"
         sources.append((target, target, ""))
@@ -130,6 +138,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
         log(res.error)
         return res
 
+    t0 = time.time()
     images, queries = [], []
     raw: dict[str, bytes | str] = {}   # picture as downloaded (kept as evidence for matches)
     for label, data, err in sources:
@@ -148,7 +157,6 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
         if min(w, h) < config.MIN_WEB_IMAGE_SIDE:
             res.skipped_small += 1
             continue
-        q.thumb = thumbnail_jpeg(img)
         raw[label] = data
         images.append(img)
         queries.append(q)
@@ -157,6 +165,10 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
     for start in range(0, len(images), 32):
         for q, matches in zip(queries[start:start + 32], match_images(images[start:start + 32], store, clip)):
             q.matches = matches
+    for q, img in zip(queries, images):   # small preview only for pictures that matched (saves time)
+        if q.matches:
+            q.thumb = thumbnail_jpeg(img)
+    res.t_compare = time.time() - t0
     res.queries = queries
     if seen_images is not None and len(seen_images) < 500_000:
         hit = {q.source for q in queries if q.matches}

@@ -60,6 +60,10 @@ class SiteResult:
     checked: int = 0             # pages checked this time
     matches: int = 0             # our images found this time
     new_ids: list = field(default_factory=list)
+    pictures: int = 0            # pictures looked at
+    t_page: float = 0.0          # seconds spent opening pages
+    t_pictures: float = 0.0      # seconds spent downloading pictures
+    t_compare: float = 0.0       # seconds spent reading and comparing pictures
 
 
 def _n(n: int, word: str) -> str:
@@ -72,7 +76,7 @@ def _parse_date(text: str) -> float:
         return 0.0
     try:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
-    except ValueError:
+    except Exception:   # also odd dates like year 0001, which Windows can't turn into a time (Errno 22)
         pass
     from email.utils import parsedate_to_datetime
 
@@ -82,11 +86,12 @@ def _parse_date(text: str) -> float:
         return 0.0
 
 
-def _get(sess, url: str, timeout=20) -> tuple[str, str] | None:
-    """Returns (final url, text) or None."""
+def _get(sess, url: str, timeout=(8, 20)) -> tuple[str, str] | None:
+    """Returns (final url, text) or None. The reason for a None is kept in sess.px_why."""
     try:
         r = sess.get(url, timeout=timeout, allow_redirects=True)
         if r.status_code != 200:
+            sess.px_why = WHY.get(r.status_code, f"it answered with error {r.status_code}")
             return None
         data = r.content
         if url.endswith(".gz") or data[:2] == b"\x1f\x8b":
@@ -95,8 +100,16 @@ def _get(sess, url: str, timeout=20) -> tuple[str, str] | None:
             except OSError:
                 pass
         return r.url, data.decode(r.encoding or "utf-8", "replace")
-    except Exception:
+    except Exception as e:
+        name = type(e).__name__
+        sess.px_why = ("it took too long to answer" if "Timeout" in name else
+                       "the address does not exist or refused the connection" if "Connection" in name else name)
         return None
+
+
+WHY = {403: "it blocks robots (error 403)", 401: "it needs a login (error 401)", 404: "page not found (error 404)",
+       429: "it asked us to slow down (error 429)", 451: "it is not available in your country (error 451)",
+       503: "it blocks robots or is down (error 503)"}
 
 
 class SiteCrawler:
@@ -252,7 +265,7 @@ def crawl_site(domain: str, store, clip, data_dir, pages_per_site=20, recheck_da
         return res
     site = SiteCrawler(domain, log=log, base_url=base_url, delay=delay)
     if not site.start():
-        res.status, res.note = "error", "the site did not answer"
+        res.status, res.note = "error", "the site did not answer: " + getattr(site.sess, "px_why", "no reason given")
         return res
     pages, how = site.find_pages(pages_per_site)
     res.found = len(pages)
@@ -282,6 +295,10 @@ def crawl_site(domain: str, store, clip, data_dir, pages_per_site=20, recheck_da
         before = store.db.execute("SELECT COALESCE(MAX(id),0) FROM findings").fetchone()[0]
         r = check_target(u, store, clip, data_dir, log=lambda *a: None, seen_images=seen_images, sess=site.sess)
         res.checked += 1
+        res.t_page += r.t_page
+        res.t_pictures += r.t_pictures
+        res.t_compare += r.t_compare
+        res.pictures += len(r.queries) + r.failed
         if not r.error and not r.banned:
             res.matches += len(r.groups)
             res.new_ids += [g.finding_id for g in r.groups if g.finding_id > before]

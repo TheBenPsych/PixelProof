@@ -460,6 +460,8 @@ class App:
                 job.log(f"Skipping {len(big)} giant platforms that can't be crawled (like {', '.join(big[:3])}).")
 
             timings = []   # (seconds, site, pages checked)
+            sums = {"t_page": 0.0, "t_pictures": 0.0, "t_compare": 0.0, "pictures": 0}
+            job.log(f"Crawling {len(targets)} sites, {workers} at once, up to {pages_per_site} new pages each.")
 
             def one(domain):
                 if job.stop:
@@ -502,8 +504,16 @@ class App:
                 if r.status == "error":
                     job.log(f"{domain}: {r.note} (after {took_s})")
                 elif r.status == "done":
+                    split = (f" Per page: {r.pictures / r.checked:.0f} pictures, opening {r.t_page / r.checked:.1f}s, "
+                             f"downloading pictures {r.t_pictures / r.checked:.1f}s, comparing {r.t_compare / r.checked:.1f}s, "
+                             f"other (finding pages, polite pause) {max(0.0, took - r.t_page - r.t_pictures - r.t_compare) / r.checked:.1f}s."
+                             if r.checked else "")
                     job.log(f"{domain}: done in {took_s}. {r.checked} page{'s' if r.checked != 1 else ''} checked"
-                            f"{per}, {r.matches} of your images found.")
+                            f"{per}, {r.matches} of your images found.{split}")
+                    with lock:
+                        for k in ("t_page", "t_pictures", "t_compare"):
+                            sums[k] += getattr(r, k)
+                        sums["pictures"] += r.pictures
 
             with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
                 list(pool.map(one, targets))
@@ -516,6 +526,11 @@ class App:
             job.log(f"Speed: {took_all} in all, {workers} sites at once, "
                     f"{res['sites'] / total * 60:.1f} sites per minute, {res['pages'] / total * 60:.1f} pages per minute"
                     + (f", {sum(t[0] for t in worked) / len(worked):.0f}s per site that had pages." if worked else "."))
+            busy = sum(sums[k] for k in ("t_page", "t_pictures", "t_compare")) or 1
+            if res["pages"]:
+                job.log(f"Where the time went: opening pages {sums['t_page'] / busy:.0%}, downloading pictures "
+                        f"{sums['t_pictures'] / busy:.0%}, comparing pictures {sums['t_compare'] / busy:.0%}. "
+                        f"{sums['pictures'] / res['pages']:.0f} pictures per page on average.")
             slow = sorted(worked, reverse=True)[:5]
             if slow and len(worked) > 5:
                 job.log("Slowest sites: " + ", ".join(f"{d} {t:.0f}s ({n} pages)" for t, d, n in slow))
