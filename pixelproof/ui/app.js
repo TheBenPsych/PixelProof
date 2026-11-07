@@ -360,6 +360,7 @@ function sitesView(main) {
 
 
 /* ---------- CRAWLER ---------- */
+function savedSpeed() { try { return Number(localStorage.getItem("pp-speed")) || 12; } catch (e) { return 12; } }
 function crawlView(main) {
   var d = S.data, watch = d.watch, big = {}; d.too_big.forEach(function (x) { big[x] = 1; });
   var info = {}; (d.crawl || []).forEach(function (r) { info[r.domain] = r; });
@@ -375,7 +376,9 @@ function crawlView(main) {
   main.appendChild(el("div", {"class": "head"}, [el("div", {}, [el("h1", {text: "Crawler"}),
     el("p", {text: "Visits the sites on your watch list, finds their newest pages and checks every picture. Matches show up in Review."})])]));
   var per = el("select", {"aria-label": "Pages per site"}, [10, 20, 50, 100].map(function (n) { return el("option", {value: String(n), text: n + " newest pages per site", selected: n === 20 ? true : null}); }));
-  function est() { var mins = Math.round(crawlable.length * Number(per.value) * 3 / 12 / 60); return mins < 90 ? "about " + Math.max(1, mins) + " minutes" : "about " + Math.round(mins / 60) + " hours"; }
+  var speed = el("select", {"aria-label": "Sites at once"}, [[12, "12 sites at once (normal)"], [24, "24 sites at once (fast)"], [48, "48 sites at once (fastest)"]].map(function (o) { return el("option", {value: String(o[0]), text: o[1], selected: o[0] === savedSpeed() ? true : null}); }));
+  speed.addEventListener("change", function () { try { localStorage.setItem("pp-speed", speed.value); } catch (e) {} upd(); });
+  function est() { var mins = Math.round(crawlable.length * Number(per.value) * 3 / Math.min(Number(speed.value), Math.max(1, crawlable.length)) / 60); return mins <= 1 ? "about a minute" : mins < 90 ? "about " + mins + " minutes" : "about " + Math.round(mins / 60) + " hours"; }
   var estEl = el("span", {"class": "muted", text: ""}); function upd() { estEl.textContent = "Takes " + est() + ". You can stop any time; next time it carries on with sites it hasn't visited yet."; }
   per.addEventListener("change", upd); upd();
   main.appendChild(el("div", {"class": "card addfolder"}, [
@@ -383,9 +386,9 @@ function crawlView(main) {
     el("p", {text: plural(watch.length, "site") + " on your watch list. " + (watch.length - crawlable.length ? plural(watch.length - crawlable.length, "giant platform") + " (like Google or YouTube) can't be crawled and will be skipped. " : "") +
       "Pages it checked in the last 7 days are skipped, so running it again only looks at new pages."}),
     Object.keys(stolen).length ? el("p", {"class": "muted", text: "Goes first: " + plural(Object.keys(stolen).length, "site") + " you marked as stolen from (" + Object.keys(stolen).slice(0, 4).join(", ") + (Object.keys(stolen).length > 4 ? ", …" : "") + "), then sites with earlier matches, then the rest."}) : null,
-    el("div", {"class": "urlrow"}, [el("div", {"class": "lcard", style: "padding:0;flex:1;min-width:220px"}, [el("div", {"class": "add"}, [per])]),
+    el("div", {"class": "urlrow"}, [el("div", {"class": "lcard", style: "padding:0;flex:1;min-width:220px"}, [el("div", {"class": "add"}, [per, speed])]),
       el("button", {"class": "btn ink big", type: "button", text: "Start crawling", disabled: crawlable.length ? null : true, onclick: function () {
-        api("/api/crawl", {pages: Number(per.value)}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
+        api("/api/crawl", {pages: Number(per.value), workers: Number(speed.value)}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
       }})]),
     estEl
   ]));
@@ -414,7 +417,7 @@ function crawlView(main) {
       el("td", {"class": "n", text: hits[w] ? String(hits[w]) : "–"}),
       el("td", {"class": "muted", style: "font-size:12.5px", text: status}),
       el("td", {style: "text-align:right;white-space:nowrap"}, big[w] ? [] : [el("button", {"class": "btn small", type: "button", text: "Crawl now", onclick: function (e) {
-        e.stopPropagation(); api("/api/crawl", {sites: [w], pages: Number(per.value)}).then(function (x) { if (x.ok === false) return toast(x.error); pollJob(); });
+        e.stopPropagation(); api("/api/crawl", {sites: [w], pages: Number(per.value), workers: 1}).then(function (x) { if (x.ok === false) return toast(x.error); pollJob(); });
       }})])
     ]));
   });

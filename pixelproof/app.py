@@ -408,6 +408,7 @@ class App:
             targets.sort(key=lambda d: (-stolen.get(d, 0), -found.get(d, 0), done.get(d, "")))
         first = [d for d in targets if d in stolen]
         pages_per_site = max(1, min(int(pages_per_site or 20), 500))
+        workers = max(1, min(int(workers or 12), 64))
         factory = self.clip_factory
 
         def work(job: Job):
@@ -913,7 +914,7 @@ def route(app: App, path: str, b: dict) -> dict:
     if path == "/api/check":
         return app.check(b.get("targets") or [b.get("target", "")])
     if path == "/api/crawl":
-        return app.crawl(b.get("sites") or None, int(b.get("pages") or 20))
+        return app.crawl(b.get("sites") or None, int(b.get("pages") or 20), int(b.get("workers") or 12))
     if path == "/api/news":
         return app.news(b.get("hours") or 3, bool(b.get("us_only", True)))
     if path == "/api/index":
