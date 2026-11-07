@@ -37,11 +37,22 @@ CREATE TABLE IF NOT EXISTS pages (
     first_checked TEXT, last_checked TEXT, pictures INTEGER, found INTEGER
 );
 CREATE INDEX IF NOT EXISTS pages_path_key ON pages(path_key);
+CREATE INDEX IF NOT EXISTS pages_domain ON pages(domain, last_checked);
+CREATE TABLE IF NOT EXISTS crawl_sites (
+    domain TEXT PRIMARY KEY, last_crawl TEXT, status TEXT, note TEXT,
+    found INTEGER, checked INTEGER, matches INTEGER
+);
 """
 
 # Columns added after step 1. Old libraries get them the first time step 2 opens them.
 FINDING_COLUMNS = {"last_seen": "TEXT", "path_key": "TEXT", "thumb": "BLOB",
-                   "width": "INTEGER", "height": "INTEGER", "times_seen": "INTEGER DEFAULT 1"}
+                   "width": "INTEGER", "height": "INTEGER", "times_seen": "INTEGER DEFAULT 1",
+                   # step 3: your decision, and the evidence saved the moment it was found
+                   "status": "TEXT DEFAULT 'new'", "status_at": "TEXT",
+                   "evidence_dir": "TEXT", "their_sha256": "TEXT", "page_sha256": "TEXT",
+                   "proof_path": "TEXT", "proof_sha256": "TEXT", "proof_at": "TEXT"}
+
+STATUSES = ("new", "stolen", "not_match")
 
 
 def now() -> str:
@@ -55,7 +66,9 @@ def match_id(finding_id: int, found_at: str) -> str:
 class Store:
     def __init__(self, data_dir: Path):
         self.dir = Path(data_dir)
-        self.db = sqlite3.connect(self.dir / "library.db")
+        # check_same_thread=False: the desktop app shares one connection between its
+        # helper threads (always behind its own lock).
+        self.db = sqlite3.connect(self.dir / "library.db", check_same_thread=False, timeout=30)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
@@ -148,6 +161,33 @@ class Store:
             "SELECT * FROM findings WHERE image_id=? AND COALESCE(NULLIF(page_url,''), image_url)<>? "
             "ORDER BY found_at", (image_id, not_page)).fetchall()
 
+    def finding(self, finding_id: int) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT f.*, i.path AS our_path, i.photographer, i.year, i.quarter, i.file_date, "
+            "i.width AS our_w, i.height AS our_h FROM findings f LEFT JOIN images i ON i.id=f.image_id "
+            "WHERE f.id=?", (int(finding_id),)).fetchone()
+
+    def set_status(self, finding_ids, status: str) -> int:
+        if status not in STATUSES:
+            raise ValueError(f"unknown status {status!r}")
+        ids = [int(i) for i in finding_ids]
+        if not ids:
+            return 0
+        q = "UPDATE findings SET status=?, status_at=? WHERE id IN (%s)" % ",".join("?" * len(ids))
+        cur = self.db.execute(q, [status, now(), *ids])
+        self.commit()
+        return cur.rowcount
+
+    def save_evidence(self, finding_id: int, evidence_dir: str, their_sha256: str | None,
+                      page_sha256: str | None) -> None:
+        self.db.execute("UPDATE findings SET evidence_dir=?, their_sha256=?, page_sha256=? WHERE id=?",
+                        (evidence_dir, their_sha256, page_sha256, int(finding_id)))
+
+    def save_proof(self, finding_id: int, path: str, sha256: str) -> None:
+        self.db.execute("UPDATE findings SET proof_path=?, proof_sha256=?, proof_at=? WHERE id=?",
+                        (path, sha256, now(), int(finding_id)))
+        self.commit()
+
     def all_findings(self) -> list[sqlite3.Row]:
         return self.db.execute(
             "SELECT f.*, i.path AS our_path, i.photographer, i.year, i.quarter, i.file_date, "
@@ -230,7 +270,40 @@ class Store:
         self._clip_index = faiss.deserialize_index(np.fromfile(clip_path, dtype=np.uint8))
         self._hash_index = faiss.deserialize_index_binary(np.fromfile(hash_path, dtype=np.uint8))
 
+    def search_on_card(self, device: str) -> bool:
+        """Copies the library's AI fingerprints to the graphics card so each search takes a fraction of a
+        millisecond, instead of reading through every fingerprint on the processor (slow for big libraries
+        and with many sites at once). Returns False and keeps the normal search if that is not possible."""
+        try:
+            import faiss
+            import torch
+
+            idx = self._clip_index
+            inner = faiss.downcast_index(idx.index)
+            n, d = inner.ntotal, inner.d
+            if n == 0:
+                return False
+            xb = faiss.rev_swig_ptr(inner.get_xb(), n * d)
+            vecs = np.array(xb, dtype=np.float32).reshape(n, d)
+            dtype = torch.float16 if str(device).startswith("cuda") else torch.float32
+            self._card = (torch.from_numpy(vecs).to(device=device, dtype=dtype),
+                          faiss.vector_to_array(idx.id_map).astype(np.int64), device, dtype)
+            return True
+        except Exception:
+            self._card = None
+            return False
+
     def search_clip(self, vecs: np.ndarray, k: int):
+        card = getattr(self, "_card", None)
+        if card is not None:
+            import torch
+
+            lib, ids, device, dtype = card
+            k = min(k, lib.shape[0])
+            with torch.no_grad():
+                q = torch.from_numpy(np.ascontiguousarray(vecs, dtype=np.float32)).to(device=device, dtype=dtype)
+                sims, pos = torch.topk(q @ lib.T, k, dim=1)
+            return sims.float().cpu().numpy(), ids[pos.cpu().numpy()]
         if self._clip_index.ntotal == 0:
             return np.zeros((len(vecs), 0)), np.zeros((len(vecs), 0), dtype=np.int64)
         return self._clip_index.search(np.ascontiguousarray(vecs, dtype=np.float32), min(k, self._clip_index.ntotal))

@@ -1,3 +1,4 @@
+import io
 import functools
 import http.server
 import threading
@@ -19,13 +20,14 @@ class FakeClip:
     """Stand-in for the AI model so tests run offline: a tiny blurred picture as the fingerprint."""
     dim = 256
     device = "cpu"
-    name = "fake/v2"
+    name = "fake/v3"
 
     def device_label(self):
         return "test"
 
     def preprocess(self, img):
-        a = np.asarray(img.convert("L").resize((16, 16)), dtype=np.float32).flatten()
+        a = np.asarray(img.convert("L").resize((16, 16)), dtype=np.float32)
+        a = (a + a[:, ::-1]).flatten()   # like the real AI, a flipped picture looks the same
         a -= a.mean()
         return a
 
@@ -35,6 +37,19 @@ class FakeClip:
 
     def embed(self, images):
         return self.embed_tensors([self.preprocess(i) for i in images])
+
+
+class FastFakeClip(FakeClip):
+    """Like FakeClip, but uses the quick way: pictures prepared by the helper programs (prep.py)."""
+    fast = True
+
+    def preprocess(self, img):
+        from pixelproof.prep import ai_pixels
+
+        return FakeClip.preprocess(self, Image.fromarray(ai_pixels(img)))
+
+    def embed_pixels(self, arrs):
+        return self.embed_tensors([FakeClip.preprocess(self, Image.fromarray(a)) for a in arrs])
 
 
 def make_photo(seed, size=(800, 600)):
@@ -113,10 +128,11 @@ def test_banned():
     assert not is_banned("https://notwtug.com/x", {"wtug.com"})
 
 
-def test_check_page_end_to_end(lib, tmp_path):
+@pytest.mark.parametrize("clip_kind", [FakeClip, FastFakeClip])
+def test_check_page_end_to_end(lib, tmp_path, clip_kind):
     root, files, data = lib
     store = Store(data)
-    clip = FakeClip()
+    clip = clip_kind()
     index_folder(str(root), store, clip, progress=False, log=lambda *a: None)
     store.load_indexes(clip.dim)
 
@@ -328,3 +344,144 @@ def test_old_step1_database_upgrades(tmp_path):
     fid, found = store.save_finding("https://nypost.com/a/b/c", "https://i/x.jpg", "nypost.com", 1, "exact", 0.99, 0, "same")
     assert fid == 1 and found.startswith("2026-11-06")
     assert "Summary of all checks" in render_summary(store, tmp_path)
+
+
+def _detailed(seed, size=(800, 533)):
+    import random
+
+    from PIL import ImageDraw
+
+    rnd = random.Random(seed)
+    img = Image.new("RGB", size, (rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)))
+    d = ImageDraw.Draw(img)
+    for _ in range(160):
+        x, y = rnd.randrange(size[0]), rnd.randrange(size[1])
+        box = (x, y, x + rnd.randrange(10, 90), y + rnd.randrange(10, 90))
+        fill = tuple(rnd.randrange(256) for _ in range(3))
+        (d.rectangle if rnd.random() < 0.5 else d.ellipse)(box, fill=fill, outline=(0, 0, 0))
+    return img
+
+
+def test_double_check_tells_same_photo_from_lookalike(tmp_path):
+    """The AI can say two photos of the same person 'look alike'. The double-check keeps edited copies of the
+    same photo (crop, banner, colour, flip) and drops a different photo."""
+    pytest.importorskip("cv2")
+    from PIL import ImageDraw, ImageEnhance
+
+    from pixelproof.matcher import double_check
+
+    ours = _detailed(1)
+    ours.save(tmp_path / "ours.jpg", quality=92)
+    row = {"id": 1, "path": str(tmp_path / "ours.jpg")}
+    crop = ours.crop((150, 100, 650, 433)).resize((420, 280))
+    banner = ImageEnhance.Color(ours).enhance(1.7)
+    ImageDraw.Draw(banner).rectangle((0, 470, 800, 533), fill=(200, 0, 0))
+    for theirs, flipped in ((crop, False), (banner, False), (ImageOps.mirror(ours), True)):
+        cat, note = double_check(theirs, row, flipped, "possible", "similar, needs a human look", {})
+        assert cat == "edited" and "details line up" in note
+    assert double_check(_detailed(2), row, False, "possible", "x", {}) == (None, "")
+    # our file moved: an edited hit is kept with a note (a "possible" one is dropped, see below)
+    cat, note = double_check(crop, {"id": 2, "path": str(tmp_path / "gone.jpg")}, False, "edited", "x", {})
+    assert cat == "edited" and "could not be double-checked" in note
+
+
+def test_double_check_ignores_a_shared_flag():
+    """Two different photos that both show the same flag (stripes and stars line up by chance) are not a match."""
+    pytest.importorskip("cv2")
+    from PIL import ImageDraw
+
+    from pixelproof.fingerprint import same_photo_score
+
+    def flag():
+        f = Image.new("RGB", (190, 100), "white")
+        d = ImageDraw.Draw(f)
+        for i in range(0, 13, 2):
+            d.rectangle((0, i * 100 // 13, 190, (i + 1) * 100 // 13), fill=(178, 34, 52))
+        d.rectangle((0, 0, 76, 54), fill=(60, 59, 110))
+        for y in range(5, 54, 10):
+            for x in range(6, 76, 12):
+                d.ellipse((x, y, x + 4, y + 4), fill="white")
+        return f
+
+    a, b = _detailed(11), _detailed(12)
+    a.paste(flag(), (60, 60))
+    b.paste(flag().resize((285, 150)), (400, 300))
+    assert same_photo_score(a, b) == 0
+    assert same_photo_score(a.crop((40, 40, 700, 500)), a) > 20
+
+
+def test_search_on_card_gives_same_results(lib):
+    """The graphics-card search (tested here on the processor) finds the same images as the normal search."""
+    pytest.importorskip("torch")
+    root, files, data = lib
+    store = Store(data)
+    clip = FakeClip()
+    index_folder(str(root), store, clip, progress=False, log=lambda *a: None)
+    store.load_indexes(clip.dim)
+    q = clip.embed([Image.open(p) for p in list(files.values())[:3]])
+    s1, i1 = store.search_clip(q, 3)
+    assert store.search_on_card("cpu")
+    s2, i2 = store.search_clip(q, 3)
+    assert (i1 == i2).all() and np.allclose(s1, s2, atol=1e-4)
+
+
+def test_helper_preparation_matches_the_ai():
+    """The helpers' 224x224 pixels give the same numbers as the AI's own preparation."""
+    open_clip = pytest.importorskip("open_clip")
+    from pixelproof.prep import ai_pixels, prepare
+    import torch
+
+    t = open_clip.image_transform(224, is_train=False)
+    norm = t.transforms[-1]
+    for size in [(800, 600), (300, 900), (224, 224), (1000, 230)]:
+        img = make_photo(5, size)
+        want = t(img)
+        x = torch.from_numpy(ai_pixels(img)).permute(2, 0, 1).float() / 255.0
+        got = (x - torch.tensor(norm.mean).view(3, 1, 1)) / torch.tensor(norm.std).view(3, 1, 1)
+        assert torch.allclose(got, want, atol=1e-5), size
+    buf = io.BytesIO()
+    make_photo(5).save(buf, "JPEG")
+    p = prepare(buf.getvalue(), 100)
+    assert p.pixels.shape == (224, 224, 3) and (p.width, p.height) == (800, 600)
+    assert prepare(buf.getvalue(), 1000) == "small" and prepare(b"junk").startswith("not a readable")
+
+
+def test_real_model_uses_the_quick_way():
+    """The real AI wrapper switches on the quick way only after checking it gives the same numbers."""
+    open_clip = pytest.importorskip("open_clip")
+    import torch
+
+    from pixelproof.fingerprint import Clip
+
+    c = Clip.__new__(Clip)
+    c.torch, c.device, c.half = torch, "cpu", False
+    c.preprocess = open_clip.image_transform(224, is_train=False)
+    assert c._setup_fast()
+    c.preprocess = open_clip.image_transform(256, is_train=False)   # a different preparation: not used
+    assert not c._setup_fast()
+
+
+def test_missing_file_drops_only_unproven_lookalikes():
+    from pixelproof.matcher import double_check
+
+    row = {"id": 1, "path": "/no/such/file.jpg"}
+    img = make_photo(3)
+    assert double_check(img, row, False, "possible", "similar", {}) == (None, "")
+    cat, note = double_check(img, row, False, "edited", "looks edited", {})
+    assert cat == "edited" and "not found" in note
+
+
+def test_double_check_in_a_helper_gives_the_same_answer(tmp_path):
+    pytest.importorskip("cv2")
+    from pixelproof.matcher import double_check, double_check_in_helper
+
+    ours = _detailed(1)
+    ours.save(tmp_path / "ours.jpg", quality=92)
+    row = {"id": 1, "path": str(tmp_path / "ours.jpg")}
+    for theirs in (ours.crop((150, 100, 650, 433)), _detailed(2)):
+        buf = io.BytesIO()
+        theirs.save(buf, "JPEG", quality=90)
+        here = double_check(Image.open(io.BytesIO(buf.getvalue())).convert("RGB"), row, False, "possible", "x", {})
+        there = double_check_in_helper(buf.getvalue(), row, False, "possible", "x")
+        assert (here[0], there[0]) in (("edited", "edited"), (None, None))
+    assert double_check_in_helper(b"x", {"id": 2, "path": str(tmp_path / "gone.jpg")}, False, "possible", "x") == (None, "")

@@ -1,0 +1,3 @@
+Fonts used by the PixelProof app and its Proof of Discovery PDFs:
+  Plus Jakarta Sans, Unbounded, JetBrains Mono
+All three are free fonts under the SIL Open Font License 1.1 (https://openfontlicense.org).

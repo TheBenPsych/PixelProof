@@ -1,5 +1,6 @@
 """PixelProof commands.
 
+  pixelproof app                        open the desktop app (this is what PixelProof.bat does)
   pixelproof doctor                     check that everything is installed
   pixelproof index "G:\\My Drive\\Photographers"   fingerprint your images
   pixelproof check https://example.com/page       check one page (or a .txt list of links, or a picture file)
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import webbrowser
 
@@ -167,6 +169,27 @@ def cmd_check(args, data_dir) -> int:
     return 0
 
 
+def cmd_app(args, data_dir) -> int:
+    from .app import serve
+
+    serve(data_dir, open_app=not args.no_window, port=args.port)
+    return 0
+
+
+def cmd_proof(args, data_dir) -> int:
+    from .app import App
+
+    app = App(data_dir)
+    for mid in args.match_ids:
+        m = re.fullmatch(r"(?:PX-\d{4}-)?0*(\d+)", mid.strip(), re.I)
+        if not m:
+            print(f"{mid}: not a match ID (they look like PX-2026-000123)")
+            continue
+        res = app.proof(int(m.group(1)))
+        print(res.get("path") or res.get("error"))
+    return 0
+
+
 def cmd_summary(args, data_dir) -> int:
     from .summary import write_summary
     from .store import Store
@@ -288,13 +311,20 @@ def main(argv=None) -> int:
     a.add_argument("sites", nargs="*")
     a.add_argument("--yes", action="store_true", help="don't ask to confirm")
 
+    ap = sub.add_parser("app", help="open the desktop app")
+    ap.add_argument("--no-window", action="store_true", help="just run the engine, don't open a window")
+    ap.add_argument("--port", type=int, default=0)
+
+    pr = sub.add_parser("proof", help="make the Proof of Discovery PDF for a match ID")
+    pr.add_argument("match_ids", nargs="+")
+
     m = sub.add_parser("summary", help="everything found so far: repeat copies, sister sites, licensed uses")
     m.add_argument("--no-open", action="store_true")
 
     args = p.parse_args(argv)
     data_dir = config.data_dir(args.data)
     handler = {"doctor": cmd_doctor, "index": cmd_index, "check": cmd_check, "status": cmd_status,
-               "approve": cmd_approve, "summary": cmd_summary}[args.cmd]
+               "approve": cmd_approve, "summary": cmd_summary, "app": cmd_app, "proof": cmd_proof}[args.cmd]
     try:
         return handler(args, data_dir)
     except KeyboardInterrupt:

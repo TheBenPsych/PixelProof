@@ -17,8 +17,13 @@ LAZY_ATTRS = ("src", "data-src", "data-lazy-src", "data-original", "data-full", 
 def session():
     import requests
 
+    from requests.adapters import HTTPAdapter
+
     s = requests.Session()
-    s.headers.update({"User-Agent": config.USER_AGENT, "Accept-Language": "en-US,en;q=0.9"})
+    s.mount("https://", HTTPAdapter(pool_connections=64, pool_maxsize=64))
+    s.mount("http://", HTTPAdapter(pool_connections=64, pool_maxsize=64))
+    s.headers.update({"User-Agent": config.USER_AGENT, "Accept-Language": "en-US,en;q=0.9",
+                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"})
     return s
 
 
@@ -64,10 +69,14 @@ def _best_from_srcset(srcset: str) -> str | None:
 def extract_image_urls(html: str, base_url: str) -> list[str]:
     from bs4 import BeautifulSoup
 
-    soup = BeautifulSoup(html, "html.parser")
+    try:
+        soup = BeautifulSoup(html, "lxml")          # about 4x faster on big pages
+    except Exception:   # lxml not installed yet
+        soup = BeautifulSoup(html, "html.parser")
     base_tag = soup.find("base", href=True)
     base = urljoin(base_url, base_tag["href"]) if base_tag else base_url
     found: list[str] = []
+    have: set[str] = set()
 
     def add(u):
         if not u:
@@ -76,7 +85,8 @@ def extract_image_urls(html: str, base_url: str) -> list[str]:
         if u.startswith("data:") or u.startswith("javascript:") or u.startswith("blob:"):
             return
         full = urljoin(base, u)
-        if full.startswith(("http://", "https://")) and full not in found:
+        if full.startswith(("http://", "https://")) and full not in have:
+            have.add(full)
             found.append(full)
 
     for meta in soup.find_all("meta"):
@@ -118,20 +128,20 @@ def fetch_page(url: str, sess=None) -> tuple[str, str, bytes | None]:
     return r.url, r.text, None
 
 
-def download_images(urls: list[str], referer: str, sess=None, workers: int = 6) -> list[tuple[str, bytes | None, str]]:
+def download_images(urls: list[str], referer: str, sess=None, workers: int = 16) -> list[tuple[str, bytes | None, str]]:
     """Returns (url, bytes or None, error) in the same order."""
     sess = sess or session()
 
     def one(u):
         try:
-            with sess.get(u, timeout=30, stream=True, headers={"Referer": referer}) as r:
+            with sess.get(u, timeout=(6, 15), stream=True, headers={"Referer": referer}) as r:
                 r.raise_for_status()
-                data = b""
+                data = bytearray()
                 for chunk in r.iter_content(65536):
                     data += chunk
                     if len(data) > config.MAX_WEB_IMAGE_BYTES:
                         return u, None, "too big"
-                return u, data, ""
+                return u, bytes(data), ""
         except Exception as e:
             return u, None, f"{type(e).__name__}: {e}"[:200]
 

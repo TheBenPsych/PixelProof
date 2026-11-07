@@ -3,31 +3,61 @@
 Find where your images are being used online. PixelProof runs fully on your Windows PC.
 It never uploads your images anywhere.
 
-This is the **prototype** (steps 1 and 2). **Step 1**:
+**Double-click `PixelProof.bat`** and the PixelProof app opens in its own window. Everything is a click away:
 
-1. **Fingerprint your images.** Point it at a folder (it works with Google Drive for desktop).
-   It reads each image once, makes a small "fingerprint", and remembers the photographer,
-   year and quarter from your folders (`Photographers \ Name \ Year \ Q1`) and the date from the file name.
-   It never copies your images.
-2. **Check one page.** Paste a link. PixelProof downloads the pictures on that page, compares them
-   with your library, and opens a report in your browser showing **ours vs theirs** side by side,
-   with a match ID for each hit.
+| Screen | What it is for |
+|---|---|
+| **Home** | Paste a page link and press **Check page**. Also: check a list of links (.txt) or a picture file. |
+| **Review** | Each match shows **ours vs theirs** side by side (or **Swipe** to slide between them). Press **Y** (stolen), **N** (not a match) or **→** (skip). |
+| **Photographers** | Every photographer from your folders, with their matches, filtered by year and quarter. |
+| **Sites** | Every site where your images turned up. Sister sites (one company) are grouped. |
+| **Crawler** | Visits every site on your watch list, finds its newest pages and checks every picture. Matches land in Review. It can also read the free GDELT news feed to find new sites using your pictures. |
+| **Site lists** | Banned sites, sites approved for one photographer (licensed), sister-site companies, and sites to watch. Import a list from a file. |
+| **My images** | Add a folder of your images (fingerprinting), with a progress bar and a Stop button. |
 
-**Step 2** adds three things:
+On every match you can:
 
-3. **Licensed sites per photographer.** Mark a site as approved for one photographer (menu option `9`).
-   Their matches there show as **Licensed** instead of stolen. Other photographers on that site still show as stolen.
-4. **Sister sites.** When two sites have a page with the same link ending, for example
-   `catfishtuscaloosa.com/ixp/993/p/anchor-tuscaloosa-apps-2027-chamber/` and
-   `wtug.com/ixp/993/p/anchor-tuscaloosa-apps-2027-chamber/`, PixelProof groups them as one company.
-   You can also name a company and list its sites in `sister-sites.txt`.
-5. **Repeat copies.** When the same photo of yours turns up on more than one page, the report says so and lists
-   the other pages. Checking the same page again keeps the same match ID and first-found date.
+- **Open where found** opens the page in your normal browser.
+- **Proof of Discovery (PDF)** saves `data\proofs\PX-2026-000123.pdf`: the page link, the date and time it was found,
+  the match ID, ours and theirs side by side, and SHA-256 fingerprints.
+- **Yes, it's stolen** shows the proof first. Save the PDF, then confirm again to mark it. Sister sites with the same
+  article can be marked in the same step.
+- **Approve for (photographer)** marks the site as licensed for that photographer only.
+- **Ban site** hides the site for everyone (asks first, and offers its sister sites too).
 
-Menu option `10` makes a **summary of everything found so far**: repeat copies, sister-site groups,
-totals per photographer and per site, and licensed uses.
+**Evidence is saved the moment a match is found.** Their picture (exactly as downloaded) and the page are kept in
+`data\evidence\<match ID>`, with SHA-256 fingerprints, so the proof still holds if the site changes or deletes it later.
 
-The crawler, the full desktop app and Proof of Discovery come in later steps.
+When you close the app window, PixelProof stops by itself a few seconds later.
+The old black-window menu is still there as `PixelProof (text menu).bat`.
+
+### The crawler
+
+Put sites on your watch list (**Site lists**, or **Import site list** with a .txt file), then open **Crawler**,
+pick how many of the newest pages to check per site, and press **Start crawling**.
+
+- It finds each site's newest pages from its sitemap or news feed (or its home page if it has neither).
+- It follows each site's robots.txt and waits a moment between pages, so it is polite to the sites.
+- Pages it checked in the last 7 days are skipped, so the next run only looks at new pages.
+- Pictures that appear on many pages (logos, ads) are only checked once per run.
+- Giant platforms like Google, YouTube or Facebook are skipped; use **Check one page** there.
+- Sites built entirely with JavaScript may show few pictures; that is a known limit for now.
+- You can stop any time and start again later.
+- The heavy work (reading each page and preparing each picture) runs on all your processor cores at once, and
+  your library is searched on the graphics card. Sites that block robots (error 401, 402 or 403) are left
+  alone; their articles still reach you through **Find new sites from the news**.
+- Sites where you marked a match as stolen go first (even if they are not on the watch list), then sites with
+  earlier matches, then sites never crawled, then the ones crawled longest ago.
+
+### Find new sites from the news
+
+**Crawler → Find new sites from the news** reads the free news list from the GDELT project
+(gdeltproject.org, no account needed). Every 15 minutes it lists the new articles it saw worldwide, with each
+article's main picture. PixelProof checks every main picture against your library. When one is yours, it checks
+the whole article (with evidence, like **Check one page**) and **adds that site to your watch list** by itself.
+
+- Pick how far back to look (1 hour to 3 days). "US sites only" is on by default.
+- News lists it already read are skipped next time, so run it as often as you like.
 
 ---
 
@@ -47,7 +77,14 @@ The crawler, the full desktop app and Proof of Discovery come in later steps.
 
 ## Everyday use
 
-Double-click **`PixelProof.bat`**. You get a menu:
+Double-click **`PixelProof.bat`**. The app opens (see the table at the top).
+
+**Updating:** download the new ZIP and unzip it over your PixelProof folder, choosing **Replace the files**.
+The first start after an update may add a few new parts (about a minute). Your library and matches carry over.
+
+### The text menu (optional)
+
+`PixelProof (text menu).bat` is the step 1 and 2 menu in a black window:
 
 | Type | What it does |
 |---|---|
@@ -102,6 +139,8 @@ pixelproof status
 pixelproof approve "Yang" nypost.com
 pixelproof summary
 pixelproof doctor
+pixelproof app
+pixelproof proof PX-2026-000123
 ```
 
 ## What's in the data folder
@@ -115,6 +154,9 @@ pixelproof doctor
 | `approved.txt` | Sites licensed for one photographer |
 | `sister-sites.txt` | Groups of sites owned by one company |
 | `reports\summary.html` | Everything found so far (menu option 10) |
+| `evidence\` | Their picture and the page, saved the moment each match was first found |
+| `proofs\` | Proof of Discovery PDFs, one per match ID |
+| `watch.txt` | Sites to watch (for the crawler) |
 | `models\` | The AI model, downloaded once |
 
 Roughly 2 KB per image, so about 2 GB per million images.
@@ -131,6 +173,11 @@ Each picture gets two fingerprints:
 | Exact copy | hash differs by 8 bits or fewer |
 | Edited copy | flipped, or CLIP similarity 0.92 or higher |
 | Possible | CLIP similarity 0.89 to 0.92, needs a human look |
+
+Every Edited or Possible hit is then **double-checked**: the small details (corners, edges) of the two pictures
+must line up, most of them must agree, and when our picture is laid on top of theirs the pixels must agree too.
+A crop, filter, banner, black and white or resize of the same photo passes easily; a different photo of the same
+person, flag or scene is dropped. If your file has moved and can't be opened, the hit is kept with a note.
 
 The starting values live in `pixelproof\config.py` and will be tuned on your real images.
 
