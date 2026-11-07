@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "PixelProof"
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 
 # The app folder (the folder that holds install.bat). Data lives next to it in "data".
 APP_DIR = Path(__file__).resolve().parent.parent
@@ -25,10 +25,11 @@ CLIP_PRETRAINED = "openai"
 # Matching rules (starting values, we will tune them on your real images).
 EXACT_MAX_HASH_DIST = 8      # perceptual hash differs by 8 bits or fewer -> Exact copy
 EDITED_MIN_CLIP = 0.92       # CLIP similarity 0.92 or higher -> Edited copy
-# "Looks alike" hits are double-checked: the small details (corners, edges) of the two pictures must line up.
-# A crop/filter/logo/resize of the same photo keeps 25 to 1,800 of them; a different photo of the same person
-# or scene keeps 1 to 6 (tested on the 7 Trump, flag and ICE pictures the news feed found on 2026-11-07).
-SAME_PHOTO_MIN_POINTS = 15
+# "Looks alike" hits are double-checked (fingerprint.same_photo_score): the small details (corners, edges) of
+# the two pictures must line up, most matched details must agree, and when one picture is laid on top of the
+# other the pixels must agree (0.79-1.0 for crops, recolours, banners, black and white of the same photo;
+# -0.15 to 0.2 for the 15 look-alikes of Trump, flags and ICE vests the news feed found on 2026-11-07).
+SAME_PHOTO_MIN_POINTS = 20
 POSSIBLE_MIN_CLIP = 0.89     # CLIP similarity 0.89 to 0.92 -> Possible (0.85 let in other photos of the same person)
 
 # Web images smaller than this (either side, in pixels) are skipped: icons, logos, buttons.

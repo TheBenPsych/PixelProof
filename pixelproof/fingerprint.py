@@ -149,8 +149,46 @@ def same_photo_score(a: Image.Image, b: Image.Image, mirrored: bool = False) -> 
     good = [m for m, *n in pairs if n and m.distance < 0.8 * n[0].distance]
     if len(good) < 8:
         return 0
-    src = np.float32([ka[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst = np.float32([kb[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    src = np.float32([ka[m.queryIdx].pt for m in good])
+    dst = np.float32([kb[m.trainIdx].pt for m in good])
     # a crop / resize / small rotation of the same photo: one "similarity" move explains all the details
-    _, inl = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=6.0)
-    return int(inl.sum()) if inl is not None else 0
+    move, inl = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=6.0)
+    if move is None or inl is None:
+        return 0
+    keep = inl.ravel() == 1
+    n = int(keep.sum())
+    scale = float(np.hypot(move[0, 0], move[1, 0]))
+    # Look-alike photos (same person, flags, stripes) can line up a few repeating details by chance, but:
+    #  - only a small share of the matched details agree (same photo: 66-100%, look-alikes: 9-31%), so at least 50%
+    #  - the agreeing details sit in one tiny spot of their picture, or the "move" squashes it to nothing
+    if n / len(good) < 0.5 or not 0.1 <= scale <= 10:
+        return 0
+
+    def spread(pts, shape):
+        return cv2.contourArea(cv2.convexHull(pts)) / float(shape[0] * shape[1]) if len(pts) >= 3 else 0.0
+
+    if spread(src[keep], ga.shape) < 0.02:      # their picture: the same photo fills most of it
+        return 0
+    if overlap_likeness(ga, gb, move) < 0.5:     # laid on top of each other, the pictures must agree
+        return 0
+    return n
+
+
+def overlap_likeness(ga, gb, move) -> float:
+    """Lays our picture on top of theirs (using the move found above) and measures how alike the overlapping
+    pixels are, from -1 to 1. The same photo, even recoloured or in black and white, scores high; a different
+    photo that happens to share a few details scores near 0."""
+    import cv2
+    import numpy as np
+
+    h, w = ga.shape
+    flags = cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
+    ours = cv2.warpAffine(gb, move, (w, h), flags=flags).astype(np.float32)
+    inside = cv2.warpAffine(np.full(gb.shape, 255, np.uint8), move, (w, h), flags=flags) > 250
+    if inside.sum() < 0.02 * w * h:
+        return 0.0
+    a = cv2.GaussianBlur(ga.astype(np.float32), (0, 0), 1.5)[inside]
+    b = cv2.GaussianBlur(ours, (0, 0), 1.5)[inside]
+    a, b = a - a.mean(), b - b.mean()
+    den = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    return float((a * b).sum() / den) if den else 0.0

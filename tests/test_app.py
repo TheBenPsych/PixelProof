@@ -352,7 +352,7 @@ def test_old_lookalikes_are_rechecked(engine):
         fid, _ = st.save_finding(page, page + ".jpg", "x.com", ours["id"], "possible", 0.9, 30, "similar")
         st.db.execute("UPDATE findings SET evidence_dir=? WHERE id=?", (str(ev), fid))
         ids.append(fid)
-    st.set_meta("lookalike_recheck", "0")   # the app already did its one-time pass when it started
+    st.set_meta("lookalike_recheck_2", "0")   # the app already did its one-time pass when it started
     st.commit()
     assert a.recheck_lookalikes() == 1
     assert st.finding(ids[0])["status"] == "new" and st.finding(ids[1])["status"] == "not_match"

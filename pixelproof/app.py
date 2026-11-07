@@ -503,7 +503,7 @@ class App:
         from .matcher import double_check
 
         st = self.store
-        if st.get_meta("lookalike_recheck") == "1":
+        if st.get_meta("lookalike_recheck_2") == "1":
             return 0
         try:
             import cv2  # noqa: F401  (the double-checker)
@@ -532,7 +532,7 @@ class App:
                 dropped += 1
         if cache and all(v is None for v in cache.values()):
             return 0   # our files are not reachable right now (drive unplugged?): try again next start
-        st.set_meta("lookalike_recheck", "1")
+        st.set_meta("lookalike_recheck_2", "1")
         st.commit()
         return dropped
 

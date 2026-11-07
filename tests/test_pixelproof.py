@@ -367,3 +367,28 @@ def test_double_check_tells_same_photo_from_lookalike(tmp_path):
     # our file moved: the hit is kept, with a note
     cat, note = double_check(crop, {"id": 2, "path": str(tmp_path / "gone.jpg")}, False, "possible", "x", {})
     assert cat == "possible" and "could not be double-checked" in note
+
+
+def test_double_check_ignores_a_shared_flag():
+    """Two different photos that both show the same flag (stripes and stars line up by chance) are not a match."""
+    pytest.importorskip("cv2")
+    from PIL import ImageDraw
+
+    from pixelproof.fingerprint import same_photo_score
+
+    def flag():
+        f = Image.new("RGB", (190, 100), "white")
+        d = ImageDraw.Draw(f)
+        for i in range(0, 13, 2):
+            d.rectangle((0, i * 100 // 13, 190, (i + 1) * 100 // 13), fill=(178, 34, 52))
+        d.rectangle((0, 0, 76, 54), fill=(60, 59, 110))
+        for y in range(5, 54, 10):
+            for x in range(6, 76, 12):
+                d.ellipse((x, y, x + 4, y + 4), fill="white")
+        return f
+
+    a, b = _detailed(11), _detailed(12)
+    a.paste(flag(), (60, 60))
+    b.paste(flag().resize((285, 150)), (400, 300))
+    assert same_photo_score(a, b) == 0
+    assert same_photo_score(a.crop((40, 40, 700, 500)), a) > 20
