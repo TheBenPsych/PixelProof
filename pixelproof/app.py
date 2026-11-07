@@ -84,6 +84,52 @@ def _rewrite_rules(path: Path, header: str, rules: list[tuple[str, list[str]]]) 
     os.replace(tmp, path)
 
 
+# ------------------------------------------------------------------ "Browse..." choosers
+
+def _fix_tcl_paths() -> None:
+    """Python's private space (.venv) sometimes can't find the files the chooser needs (Tcl/Tk).
+    Point it at the main Python install, where they are."""
+    import glob
+
+    base = Path(sys.base_prefix)
+    for var, pattern in (("TCL_LIBRARY", "tcl*"), ("TK_LIBRARY", "tk*")):
+        if os.environ.get(var):
+            continue
+        for folder in (base / "tcl", base / "lib", base / "Lib"):
+            hits = sorted(glob.glob(str(folder / pattern)), reverse=True)
+            hits = [h for h in hits if os.path.isfile(os.path.join(h, "init.tcl" if var == "TCL_LIBRARY" else "tk.tcl"))]
+            if hits:
+                os.environ[var] = hits[0]
+                break
+
+
+def _powershell_pick(kind: str) -> str | None:
+    """Opens the Windows chooser with PowerShell. Returns the path, "" if cancelled, None if it failed."""
+    if kind == "folder":
+        script = ("Add-Type -AssemblyName System.Windows.Forms;"
+                  "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
+                  "$d.Description='Choose a folder of your images';$d.ShowNewFolderButton=$false;"
+                  "$f=New-Object System.Windows.Forms.Form;$f.TopMost=$true;"
+                  "if($d.ShowDialog($f) -eq 'OK'){[Console]::Out.Write($d.SelectedPath)}")
+    else:
+        flt = "Text files (*.txt)|*.txt|All files (*.*)|*.*" if kind == "list" else \
+            "Pictures|" + ";".join("*" + e for e in sorted(config.IMAGE_EXTENSIONS)) + "|All files (*.*)|*.*"
+        script = ("Add-Type -AssemblyName System.Windows.Forms;"
+                  "$d=New-Object System.Windows.Forms.OpenFileDialog;"
+                  f"$d.Filter='{flt}';"
+                  "$f=New-Object System.Windows.Forms.Form;$f.TopMost=$true;"
+                  "if($d.ShowDialog($f) -eq 'OK'){[Console]::Out.Write($d.FileName)}")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", script],
+                             capture_output=True, text=True, timeout=600,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip()
+
+
 # ------------------------------------------------------------------ background jobs
 
 class Job:
@@ -445,6 +491,7 @@ class App:
 
         def ask():
             try:
+                _fix_tcl_paths()
                 import tkinter as tk
                 from tkinter import filedialog
 
@@ -467,6 +514,10 @@ class App:
         t = threading.Thread(target=ask)
         t.start()
         t.join()
+        if result.get("error") and sys.platform.startswith("win"):
+            ps = _powershell_pick(kind)       # plan B: the Windows chooser through PowerShell
+            if ps is not None:
+                result = {"path": ps}
         if result.get("error"):
             return {"ok": False, "error": result["error"]}
         path = os.path.normpath(result["path"]) if result.get("path") else ""
