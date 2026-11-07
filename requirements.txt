@@ -1,0 +1,10 @@
+# PyTorch (the AI engine) is installed by install.bat first, with NVIDIA graphics card support.
+open_clip_torch>=2.24
+faiss-cpu>=1.8
+imagehash>=4.3
+Pillow>=10.0
+pillow-heif>=0.16
+numpy>=1.26
+requests>=2.31
+beautifulsoup4>=4.12
+tqdm>=4.66
