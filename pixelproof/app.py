@@ -391,11 +391,13 @@ class App:
         from .sites import clean_site
 
         sites = []
-        for line in re.split(r"[\r\n,;\t ]+", text or ""):
-            line = line.split("#", 1)[0].strip()
-            s = clean_site(line) if line and "." in line else ""
-            if s and "." in s and s not in sites:
-                sites.append(s)
+        for row in (text or "").splitlines():
+            row = row.split("#", 1)[0]          # skip comments, even ones that name a site
+            for item in re.split(r"[,;\t ]+", row):
+                item = item.strip()
+                site = clean_site(item) if "." in item else ""
+                if site and "." in site and site not in sites:
+                    sites.append(site)
         if not sites:
             return {"ok": False, "error": "No sites found in that text."}
         (self.ban if into == "ban" else self.watch)(sites)

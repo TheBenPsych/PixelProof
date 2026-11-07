@@ -128,7 +128,7 @@ def test_check_review_proof_ban_approve(engine):
 def test_site_lists_and_import(engine):
     a, base, _, data = engine
     t = a.token
-    r = call(base, t, "/api/import", {"text": "https://www.badsite.com/gallery\nother.org, # comment\nnot a site", "into": "watch"})
+    r = call(base, t, "/api/import", {"text": "# list from moz.com\nhttps://www.badsite.com/gallery\nother.org, # comment about skip.com\nnot a site", "into": "watch"})
     assert r["added"] == 2
     assert call(base, t, "/api/state")["watch"] == ["badsite.com", "other.org"]
     call(base, t, "/api/watch", {"sites": ["other.org"], "remove": True})
