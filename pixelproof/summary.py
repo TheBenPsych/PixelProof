@@ -19,6 +19,7 @@ from .store import match_id
 
 MAX_REPEAT_CARDS = 150
 MAX_THEIR_THUMBS = 8
+MAX_MATCH_ROWS = 300
 
 SUMMARY_CSS = """
 .wrap{max-width:1200px}
@@ -36,6 +37,8 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 .minis img{height:64px;border-radius:6px;outline:2px solid var(--theirs-soft)}
 .count{font-size:22px;font-weight:700;color:var(--theirs)}
 .grp .body{padding:14px 18px}
+td.pv img{height:72px;max-width:120px;object-fit:contain;border-radius:6px;display:block}
+td a{word-break:break-all}
 """
 
 
@@ -196,7 +199,37 @@ def render_summary(store, data_dir) -> str:
   <div class=body><div class=chips>{chips}</div><div class=sub style='margin-top:6px'>{how}</div>{shared}</div>
 </div>""")
 
-    # 3. By photographer and by site ----------------------------------------
+    # 3. Every match, grouped by site --------------------------------------
+    out.append("<h2>Every match, by site</h2>")
+    if not stolen:
+        out.append("<p class=sub>No matches yet.</p>")
+    by_site_all: dict[str, list[Find]] = {}
+    for f in stolen:
+        by_site_all.setdefault(f.domain, []).append(f)
+    shown = 0
+    for dom, fs in sorted(by_site_all.items(), key=lambda kv: -len(kv[1])):
+        rows = []
+        for f in sorted(fs, key=lambda f: (f.page, f.found_at)):
+            if shown >= MAX_MATCH_ROWS:
+                break
+            shown += 1
+            ours = _our_thumb(f.our_path) if f.our_path else None
+            ours_html = f"<img src='{ours}' alt='ours'>" if ours else "<span class=sub>no preview</span>"
+            theirs_html = f"<img src='{_b64(f.thumb)}' alt='theirs'>" if f.thumb else "<span class=sub>check again to save</span>"
+            rows.append(
+                f"<tr><td class=pv>{ours_html}</td><td class=pv>{theirs_html}</td>"
+                f"<td><b>{_e(Path(f.our_path).name)}</b><br><span class=sub>{_e(f.photographer)}</span></td>"
+                f"<td><a href='{_e(f.page)}' target=_blank rel=noopener>{_e(f.page)}</a></td>"
+                f"<td class=mid>{_e(f.match_id)}<br>{_e(_when(f.found_at))}</td></tr>")
+        company = fs[0].company if fs[0].company != dom else ""
+        out.append(f"<details class=sect open><summary>{_e(dom)}{(' &middot; ' + _e(company)) if company else ''}"
+                   f" ({_plural(len({f.image_id for f in fs}), 'photo')})</summary><div class=tablewrap><table>"
+                   "<tr><th>Ours</th><th>Theirs</th><th>Photo</th><th>Page</th><th>Match ID / found</th></tr>"
+                   + "".join(rows) + "</table></div></details>")
+    if shown >= MAX_MATCH_ROWS:
+        out.append(f"<p class=sub>Showing the first {MAX_MATCH_ROWS:,} matches.</p>")
+
+    # 4. By photographer and by site ----------------------------------------
     out.append("<h2>By photographer</h2>")
     people: dict[str, list[Find]] = {}
     for f in finds:
@@ -225,7 +258,7 @@ def render_summary(store, data_dir) -> str:
         out.append("<div class=tablewrap><table><tr><th>Site</th><th>Company (sister sites)</th><th>Photos</th>"
                    "<th>Pages</th><th>Photographers</th></tr>" + "".join(rows) + "</table></div>")
 
-    # 4. Licensed -----------------------------------------------------------
+    # 5. Licensed -----------------------------------------------------------
     if licensed:
         items = "".join(
             f"<tr><td>{_e(f.photographer)}</td><td>{_e(f.domain)}</td><td>{_e(f.licensed)}</td>"

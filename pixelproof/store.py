@@ -175,7 +175,9 @@ class Store:
             "SELECT * FROM pages WHERE path_key=? AND url<>? ORDER BY first_checked", (path_key, not_url)).fetchall()
 
     def count_pages(self) -> int:
-        return self.db.execute("SELECT COUNT(*) FROM pages").fetchone()[0]
+        return self.db.execute(
+            "SELECT COUNT(*) FROM (SELECT url FROM pages UNION SELECT page_url FROM findings WHERE page_url<>'')"
+        ).fetchone()[0]
 
     # ---------- FAISS search indexes ----------
     def mark_dirty(self) -> None:

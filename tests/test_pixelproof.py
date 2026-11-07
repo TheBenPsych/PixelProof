@@ -296,7 +296,7 @@ def test_step2_end_to_end(lib, tmp_path, monkeypatch, capsys):
         server.shutdown()
 
     html_text = render_summary(store, data)
-    assert "Same photo on many pages" in html_text
+    assert "Same photo on many pages" in html_text and "Every match, by site" in html_text
     assert "Sister sites: 127.0.0.1 + localhost" in html_text
     assert "Licensed uses (1)" in html_text and "Luis Ortega" in html_text
     assert store.count_pages() == 3
