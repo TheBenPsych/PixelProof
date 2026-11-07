@@ -19,8 +19,27 @@ from . import config
 def _clip(data_dir):
     from .fingerprint import Clip
 
+    import logging
+    import warnings
+
+    warnings.filterwarnings("ignore", message=".*QuickGELU.*")
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    try:
+        from huggingface_hub.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
     print("Loading the AI fingerprint model (the first time this downloads about 350 MB) ...")
     return Clip(cache_dir=data_dir / "models")
+
+
+def _library_model(store) -> str | None:
+    """Which AI model the library was fingerprinted with (None if the library is empty)."""
+    if store.count() == 0:
+        return None
+    return store.get_meta("clip_model", "ViT-B-32/openai")
 
 
 def cmd_doctor(args, data_dir) -> int:
@@ -64,9 +83,15 @@ def cmd_index(args, data_dir) -> int:
 
     store = Store(data_dir)
     clip = _clip(data_dir)
-    if args.rebuild:
+    old = _library_model(store)
+    if args.rebuild or (old and old != clip.name):
+        if not args.rebuild:
+            print("PixelProof has a better AI model setting now, so every image gets a fresh fingerprint (one time).")
         store.db.execute("UPDATE images SET clip=NULL")
+        store.mark_dirty()
         store.commit()
+    store.set_meta("clip_model", clip.name)
+    store.commit()
     total_found = 0
     for folder in args.folders:
         folder = folder.strip().strip('"')
@@ -106,16 +131,20 @@ def cmd_check(args, data_dir) -> int:
         print("Your library is empty. Index a folder of your images first (option 1 in the menu).")
         return 1
     clip = _clip(data_dir)
+    if _library_model(store) != clip.name:
+        print("PixelProof was updated and your library needs fresh fingerprints first.")
+        print("Run option 1 (Fingerprint a folder) on your images folder again, then check this page.")
+        return 1
     store.load_indexes(clip.dim)
     any_match = False
     for target in _targets(args.targets):
         print(f"\nChecking {target}")
         result = check_target(target, store, clip, data_dir)
         path = write_report(result, data_dir)
-        n = len(result.matched)
+        n = len(result.groups)
         any_match |= n > 0
         if not result.error and not result.banned:
-            print(f"  {len(result.queries)} pictures checked, {n} matched your images.")
+            print(f"  {len(result.queries)} pictures checked, {n} of your images found.")
         print(f"  Report: {path}")
         if not args.no_open:
             webbrowser.open(path.as_uri())

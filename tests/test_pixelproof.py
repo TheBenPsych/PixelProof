@@ -19,6 +19,7 @@ class FakeClip:
     """Stand-in for the AI model so tests run offline: a tiny blurred picture as the fingerprint."""
     dim = 256
     device = "cpu"
+    name = "fake/v2"
 
     def device_label(self):
         return "test"
@@ -172,3 +173,19 @@ def test_check_local_file(lib):
     res = check_target(str(files["LO 04-03-2026 shoot.png"]), store, clip, data, log=lambda *a: None)
     assert res.matched and res.matched[0].matches[0].category == "exact"
     write_report(res, data)
+
+
+def test_cli_model_change_refingerprints(lib, monkeypatch, capsys):
+    from pixelproof import cli
+
+    root, files, data = lib
+    store = Store(data)
+    index_folder(str(root), store, FakeClip(), progress=False, log=lambda *a: None)
+    store.commit()  # library made with the "old" model (no clip_model saved)
+    monkeypatch.setattr(cli, "_clip", lambda d: FakeClip())
+    assert cli.main(["--data", str(data), "check", str(files["IMG_5102.jpg"]), "--no-open"]) == 1
+    assert "fresh fingerprints" in capsys.readouterr().out
+    assert cli.main(["--data", str(data), "index", str(root)]) == 0
+    assert "fresh fingerprint" in capsys.readouterr().out
+    assert cli.main(["--data", str(data), "check", str(files["IMG_5102.jpg"]), "--no-open"]) == 0
+    assert "1 of your images found" in capsys.readouterr().out

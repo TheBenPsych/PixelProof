@@ -19,7 +19,7 @@ IMAGE_EXTENSIONS = {
 }
 
 # AI fingerprint model (CLIP). Downloaded once on first use, then kept in data\models.
-CLIP_MODEL = "ViT-B-32"
+CLIP_MODEL = "ViT-B-32-quickgelu"  # the exact layout OpenAI trained this model with
 CLIP_PRETRAINED = "openai"
 
 # Matching rules (starting values, we will tune them on your real images).
