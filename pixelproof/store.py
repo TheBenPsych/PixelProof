@@ -79,6 +79,10 @@ class Store:
         )
         self.db.execute("DELETE FROM errors WHERE path=?", (path,))
 
+    def update_info(self, path, info) -> None:
+        self.db.execute("UPDATE images SET photographer=?, year=?, quarter=?, file_date=? WHERE path=?",
+                        (info.photographer, info.year, info.quarter, info.file_date, path))
+
     def save_error(self, path: str, error: str) -> None:
         self.db.execute("INSERT OR REPLACE INTO errors(path, error, at) VALUES(?,?,?)", (path, error[:500], now()))
 

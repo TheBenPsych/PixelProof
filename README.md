@@ -87,7 +87,7 @@ Each picture gets two fingerprints:
 |---|---|
 | Exact copy | hash differs by 8 bits or fewer |
 | Edited copy | flipped, or CLIP similarity 0.92 or higher |
-| Possible | CLIP similarity 0.85 to 0.92, needs a human look |
+| Possible | CLIP similarity 0.89 to 0.92, needs a human look |
 
 The starting values live in `pixelproof\config.py` and will be tuned on your real images.
 

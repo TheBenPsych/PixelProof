@@ -24,7 +24,18 @@ DATE_PATTERNS = [
     re.compile(r"(?<!\d)(?P<y>(?:19|20)\d\d)[-_. ]?(?P<m>0[1-9]|1[0-2])[-_. ]?(?P<d>0[1-9]|[12]\d|3[01])(?!\d)"),
     # 02-14-2026, 02_14_2026
     re.compile(r"(?<!\d)(?P<m>0?[1-9]|1[0-2])[-_.](?P<d>0?[1-9]|[12]\d|3[01])[-_.](?P<y>(?:19|20)\d\d)(?!\d)"),
+    # 11.1.26, 4-15-26, 04_15_26 (two-digit year)
+    re.compile(r"(?<![\d.])(?P<m>0?[1-9]|1[0-2])[-_.](?P<d>0?[1-9]|[12]\d|3[01])[-_.](?P<y>\d\d)(?![\d.])"),
 ]
+YEAR_SUFFIX_RE = re.compile(r"^(.*?\S)[\s_-]+(?:19|20)\d\d$|^(?:19|20)\d\d[\s_-]+(\S.*)$")
+
+
+def clean_photographer(name: str) -> str:
+    """'Yang 2026' -> 'Yang'."""
+    m = YEAR_SUFFIX_RE.match(name.strip())
+    if m:
+        return (m.group(1) or m.group(2)).strip()
+    return name.strip()
 
 
 @dataclass
@@ -46,8 +57,11 @@ def date_from_filename(filename: str) -> str | None:
     stem = Path(filename).stem
     for pattern in DATE_PATTERNS:
         for m in pattern.finditer(stem):
+            y = int(m["y"])
+            if y < 100:
+                y += 2000 if 2000 + y <= date.today().year + 1 else 1900
             try:
-                d = date(int(m["y"]), int(m["m"]), int(m["d"]))
+                d = date(y, int(m["m"]), int(m["d"]))
             except ValueError:
                 continue
             if 1950 <= d.year <= date.today().year + 1:
@@ -75,7 +89,7 @@ def describe(path: str | os.PathLike, root: str | os.PathLike | None = None) -> 
         if year_idx > 0:
             candidate = parts[year_idx - 1].strip()
             if candidate.lower() not in CONTAINER_NAMES and not candidate.endswith((":\\", "/", ":")):
-                info.photographer = candidate
+                info.photographer = clean_photographer(candidate)
     else:
         for name in reversed(parts):
             q = parse_quarter(name)
@@ -88,11 +102,11 @@ def describe(path: str | os.PathLike, root: str | os.PathLike | None = None) -> 
         try:
             rel = p.parent.relative_to(Path(root))
             if rel.parts:
-                info.photographer = rel.parts[0]
+                info.photographer = clean_photographer(rel.parts[0])
             else:
                 name = Path(root).name
                 if name and name.lower() not in CONTAINER_NAMES:
-                    info.photographer = name
+                    info.photographer = clean_photographer(name)
         except ValueError:
             pass
 

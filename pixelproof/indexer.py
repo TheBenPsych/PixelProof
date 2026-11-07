@@ -49,7 +49,7 @@ def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: i
 
     log(f"Looking for images in {root} ...")
     known = store.known_files()
-    todo = []
+    todo, refresh = [], []
     for path in library.scan(root):
         res.found += 1
         try:
@@ -58,10 +58,15 @@ def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: i
             continue
         if known.get(path) == (st.st_size, st.st_mtime):
             res.skipped += 1
+            refresh.append(path)
         else:
             todo.append(path)
         if progress and res.found % 5000 == 0:
             log(f"  ...found {res.found:,} so far")
+    # Re-read names for files already done (cheap, no image opened) so naming fixes apply.
+    for path in refresh:
+        store.update_info(path, library.describe(path, root))
+    store.commit()
     log(f"Found {res.found:,} images. Already done: {res.skipped:,}. To fingerprint now: {len(todo):,}.")
     if not todo:
         res.seconds = time.time() - start

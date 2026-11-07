@@ -71,6 +71,11 @@ def test_describe_paths():
     info = library.describe("/drive/Luis/random/IMG_20231231_1200.jpg", root="/drive")
     assert info.photographer == "Luis" and info.file_date == "2023-12-31" and info.year == 2023
     assert library.date_from_filename("IMG_5102.jpg") is None
+    assert library.date_from_filename("11.1.26_Hochul, Mamdani_Yang.jpg") == "2026-11-01"
+    assert library.date_from_filename("4.15.26_Kathy Hochul 4_Yang.jpg") == "2026-04-15"
+    assert library.date_from_filename("v1.2.3.jpg") is None
+    info = library.describe("C:/Users/Ben/Downloads/Yang 2026/2026/2nd quarter reg - 3.27.26-6.19.26/4.15.26_a.jpg")
+    assert (info.photographer, info.year, info.quarter, info.file_date) == ("Yang", 2026, "Q2", "2026-04-15")
     assert library.date_from_filename("2026-13-40.jpg") is None
 
 
@@ -118,11 +123,12 @@ def test_check_page_end_to_end(lib, tmp_path):
     site.mkdir()
     ours = Image.open(files["MayaChen_2026-02-14_0031.jpg"])
     ours.resize((400, 300)).save(site / "resized.jpg", quality=60)          # exact copy
+    ours.resize((200, 150)).save(site / "resized-small.jpg", quality=60)    # same copy, another size
     ImageOps.mirror(Image.open(files["IMG_5102.jpg"])).save(site / "flipped.jpg")  # flipped
     make_photo(99).save(site / "unrelated.jpg")                              # not ours
     make_photo(1, (40, 40)).save(site / "icon.png")                         # tiny, skipped
     (site / "page.html").write_text("""<html><body><h1>Stolen</h1>
-        <img src="resized.jpg"><img src="flipped.jpg"><img src="unrelated.jpg">
+        <img src="resized-small.jpg"><img src="resized.jpg"><img src="flipped.jpg"><img src="unrelated.jpg">
         <img src="icon.png"><img src="missing.jpg"></body></html>""")
 
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(site))
@@ -136,7 +142,11 @@ def test_check_page_end_to_end(lib, tmp_path):
         server.shutdown()
 
     assert res.error == ""
-    assert len(res.queries) == 3 and res.skipped_small == 1 and res.failed == 1
+    assert len(res.queries) == 4 and res.skipped_small == 1 and res.failed == 1
+    # Two sizes of the same picture become one group, biggest copy first.
+    assert len(res.groups) == 2
+    g = res.groups[0]
+    assert len(g.copies) == 2 and Path(g.main[0].source).name == "resized.jpg"
     by_name = {Path(q.source).name: q for q in res.queries}
     top = by_name["resized.jpg"].matches[0]
     assert top.category == "exact" and Path(top.row["path"]).name == "MayaChen_2026-02-14_0031.jpg"
@@ -145,7 +155,7 @@ def test_check_page_end_to_end(lib, tmp_path):
     assert top.match_id.startswith("PX-")
     report = write_report(res, data)
     text = report.read_text(encoding="utf-8")
-    assert "Exact copy" in text and "Maya Chen" in text and "Open where found" in text
+    assert "Exact copy" in text and "1 other size" in text and "Maya Chen" in text and "Open where found" in text
 
     # Banned site is skipped.
     (data / "banned.txt").write_text("127.0.0.1\n")

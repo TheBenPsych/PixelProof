@@ -14,6 +14,20 @@ from .store import Store, match_id, now
 
 
 @dataclass
+class Group:
+    """One of our images and every copy of it on the page (often the same picture in several sizes)."""
+    image_id: int
+    row: object
+    best: object                       # the strongest Candidate
+    copies: list = field(default_factory=list)  # (Query, Candidate), largest copy first
+    match_id: str = ""
+
+    @property
+    def main(self):
+        return self.copies[0]
+
+
+@dataclass
 class CheckResult:
     target: str
     page_url: str = ""
@@ -24,10 +38,31 @@ class CheckResult:
     queries: list[Query] = field(default_factory=list)
     skipped_small: int = 0
     failed: int = 0
+    groups: list[Group] = field(default_factory=list)
 
     @property
     def matched(self) -> list[Query]:
         return [q for q in self.queries if q.matches]
+
+
+def group_matches(queries: list[Query]) -> list[Group]:
+    from .matcher import CATEGORY_ORDER
+
+    def strength(c):
+        return (CATEGORY_ORDER[c.category], c.hash_dist, -c.clip_sim)
+
+    groups: dict[int, Group] = {}
+    for q in queries:
+        for c in q.matches:
+            g = groups.get(c.image_id)
+            if g is None:
+                g = groups[c.image_id] = Group(c.image_id, c.row, c)
+            elif strength(c) < strength(g.best):
+                g.best = c
+            g.copies.append((q, c))
+    for g in groups.values():
+        g.copies.sort(key=lambda qc: (strength(qc[1])[0], -(qc[0].width * qc[0].height)))
+    return sorted(groups.values(), key=lambda g: strength(g.best))
 
 
 def _is_url(s: str) -> bool:
@@ -94,11 +129,17 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
             q.matches = matches
     res.queries = queries
 
-    # Save every match so it has a tracking ID (used later by Proof of Discovery).
-    for q in res.matched:
-        for c in q.matches:
-            fid, found_at = store.save_finding(res.page_url or "", q.source, res.domain, c.image_id,
-                                               c.category, c.clip_sim, c.hash_dist, c.note)
-            c.match_id = match_id(fid, found_at)
+    res.groups = group_matches(queries)
+
+    # Save one finding per image of ours, so it has a tracking ID (used later by Proof of Discovery).
+    for g in res.groups:
+        q, _ = g.main
+        others = [cq.source for cq, _ in g.copies[1:]]
+        note = g.best.note + (f"; also at {len(others)} other image links on the page" if others else "")
+        fid, found_at = store.save_finding(res.page_url or "", q.source, res.domain, g.image_id,
+                                           g.best.category, g.best.clip_sim, g.best.hash_dist, note)
+        g.match_id = match_id(fid, found_at)
+        for _, c in g.copies:
+            c.match_id = g.match_id
     store.commit()
     return res

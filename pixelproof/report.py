@@ -54,8 +54,8 @@ dt{color:var(--muted)} dd{margin:0;word-break:break-all}
 .why b{color:var(--fg)}
 .empty{background:var(--card);border:1px dashed var(--line);border-radius:16px;padding:40px;text-align:center;color:var(--muted)}
 .empty b{display:block;font-size:20px;color:var(--fg);margin-bottom:6px}
-details{margin-top:28px;color:var(--muted)} summary{cursor:pointer}
-details li{word-break:break-all}
+details.more{margin-top:10px;color:var(--muted);font-size:14px} summary{cursor:pointer}
+details.more ul{margin:6px 0 0;padding-left:18px} details.more li{word-break:break-all}
 .btn{display:inline-block;background:var(--theirs);color:#fff;text-decoration:none;font-weight:600;padding:8px 16px;border-radius:10px;margin-top:10px}
 """
 
@@ -84,8 +84,8 @@ def _when(iso: str) -> str:
 
 
 def render(result) -> str:
-    matched = result.matched
-    n_matches = sum(len(q.matches) for q in matched)
+    groups = result.groups
+    n_copies = sum(len(g.copies) for g in groups)
     title = result.page_url or result.target
     out = [f"<!doctype html><html lang=en><head><meta charset=utf-8>"
            f"<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -105,22 +105,29 @@ def render(result) -> str:
     else:
         out.append("<div class=stats>"
                    f"<div class=stat><div class=n>{len(result.queries)}</div><div class=l>pictures checked</div></div>"
-                   f"<div class='stat hit'><div class=n>{len(matched)}</div><div class=l>pictures matched yours</div></div>"
-                   f"<div class=stat><div class=n>{n_matches}</div><div class=l>matches in total</div></div>"
+                   f"<div class='stat hit'><div class=n>{len(groups)}</div><div class=l>of your images found</div></div>"
+                   f"<div class=stat><div class=n>{n_copies}</div><div class=l>copies on the page</div></div>"
                    f"<div class=stat><div class=n>{result.skipped_small}</div><div class=l>tiny images skipped</div></div>"
                    "</div>")
-        if not matched:
+        if not groups:
             out.append("<div class=empty><b>No matches found</b>None of the pictures on this page look like images in your library.</div>")
         thumbs: dict[str, str | None] = {}
-        for q in matched:
-            for c in q.matches:
-                row = c.row
-                if row["path"] not in thumbs:
-                    thumbs[row["path"]] = _our_thumb(row["path"])
-                ours = thumbs[row["path"]]
-                ours_img = f"<img src='{ours}' alt='our image'>" if ours else "<div class=none>Preview not available (is Google Drive running?)</div>"
-                where = " &middot; ".join(_e(x) for x in (row["photographer"], row["year"], row["quarter"]) if x)
-                out.append(f"""
+        for g in groups:
+            q, _ = g.main
+            c, row = g.best, g.row
+            extra = g.copies[1:]
+            more = ""
+            if extra:
+                links = "".join(f"<li><a href='{_e(eq.source)}' target=_blank rel=noopener>{_e(eq.source)}</a> "
+                                f"({_e(eq.width)} &times; {_e(eq.height)})</li>" for eq, _ in extra)
+                more = (f"<details class=more><summary>Also on this page in {len(extra)} other "
+                        f"size{'s' if len(extra) > 1 else ''}</summary><ul>{links}</ul></details>")
+            if row["path"] not in thumbs:
+                thumbs[row["path"]] = _our_thumb(row["path"])
+            ours = thumbs[row["path"]]
+            ours_img = f"<img src='{ours}' alt='our image'>" if ours else "<div class=none>Preview not available (was the file moved, or is Google Drive offline?)</div>"
+            where = " &middot; ".join(_e(x) for x in (row["photographer"], row["year"], row["quarter"]) if x)
+            out.append(f"""
 <div class=card>
   <div class=head><span class='pill p-{c.category}'>{CATEGORY_LABELS[c.category]}</span>
     <span class=mid>Match ID {_e(c.match_id)}</span></div>
@@ -139,6 +146,7 @@ def render(result) -> str:
           <dt>Image link</dt><dd><a href='{_e(q.source)}' target=_blank rel=noopener>{_e(q.source)}</a></dd>
           <dt>Size</dt><dd>{_e(q.width)} &times; {_e(q.height)}</dd>
           <dt>Found</dt><dd>{_e(_when(result.checked_at))}</dd></dl>
+      {more}
       {f"<a class=btn href='{_e(result.page_url)}' target=_blank rel=noopener>Open where found</a>" if result.page_url else ""}
     </div>
   </div>

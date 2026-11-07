@@ -25,7 +25,7 @@ CLIP_PRETRAINED = "openai"
 # Matching rules (starting values, we will tune them on your real images).
 EXACT_MAX_HASH_DIST = 8      # perceptual hash differs by 8 bits or fewer -> Exact copy
 EDITED_MIN_CLIP = 0.92       # CLIP similarity 0.92 or higher -> Edited copy
-POSSIBLE_MIN_CLIP = 0.85     # CLIP similarity 0.85 to 0.92 -> Possible
+POSSIBLE_MIN_CLIP = 0.89     # CLIP similarity 0.89 to 0.92 -> Possible (0.85 let in other photos of the same person)
 
 # Web images smaller than this (either side, in pixels) are skipped: icons, logos, buttons.
 MIN_WEB_IMAGE_SIDE = 120
