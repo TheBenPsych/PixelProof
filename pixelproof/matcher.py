@@ -71,7 +71,8 @@ def match_images(images, store, clip, k: int = 5) -> list[list[Candidate]]:
             mirrored = d_mirror < d_normal
             dist = min(d_normal, d_mirror)
             cat, note = categorize(dist, sim, mirrored)
-            if cat and dist > config.EXACT_MAX_HASH_DIST:   # the picture hash did not already prove it
+            # double-check unless the picture hash proved it AND the AI agrees it looks the same
+            if cat and (dist > config.EXACT_MAX_HASH_DIST or sim < config.HASH_HIT_MIN_CLIP):
                 cat, note = double_check(images[qi], row, mirrored, cat, note, ours)
             if cat:
                 found.append(Candidate(image_id, sim, dist, mirrored, cat, note, row))

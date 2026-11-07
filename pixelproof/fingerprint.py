@@ -64,8 +64,17 @@ def phash(img: Image.Image) -> bytes:
 
 
 def phash_pair(img: Image.Image) -> tuple[bytes, bytes]:
-    """Hash of the image and of its mirror image (catches flipped copies)."""
-    return phash(img), phash(ImageOps.mirror(img))
+    """Hash of the image and of its mirror image (catches flipped copies). Same result as phash(), but the
+    picture is shrunk once and the mirror is taken of the tiny 32x32 version (much faster)."""
+    import scipy.fftpack
+
+    px = np.asarray(img.convert("L").resize((32, 32), Image.Resampling.LANCZOS))
+
+    def h(p):
+        dct = scipy.fftpack.dct(scipy.fftpack.dct(p, axis=0), axis=1)[:8, :8]
+        return np.packbits((dct > np.median(dct)).flatten()).tobytes()
+
+    return h(px), h(np.ascontiguousarray(px[:, ::-1]))
 
 
 def hash_distance(a: bytes, b: bytes) -> int:

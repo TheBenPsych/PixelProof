@@ -19,13 +19,14 @@ class FakeClip:
     """Stand-in for the AI model so tests run offline: a tiny blurred picture as the fingerprint."""
     dim = 256
     device = "cpu"
-    name = "fake/v2"
+    name = "fake/v3"
 
     def device_label(self):
         return "test"
 
     def preprocess(self, img):
-        a = np.asarray(img.convert("L").resize((16, 16)), dtype=np.float32).flatten()
+        a = np.asarray(img.convert("L").resize((16, 16)), dtype=np.float32)
+        a = (a + a[:, ::-1]).flatten()   # like the real AI, a flipped picture looks the same
         a -= a.mean()
         return a
 

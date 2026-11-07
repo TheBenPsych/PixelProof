@@ -551,7 +551,7 @@ class App:
         from .matcher import double_check
 
         st = self.store
-        if st.get_meta("lookalike_recheck_2") == "1":
+        if st.get_meta("lookalike_recheck_3") == "1":
             return 0
         try:
             import cv2  # noqa: F401  (the double-checker)
@@ -560,8 +560,8 @@ class App:
         dropped = 0
         rows = st.db.execute(
             "SELECT f.id, f.evidence_dir, f.note, i.id AS iid, i.path FROM findings f JOIN images i ON i.id=f.image_id "
-            "WHERE COALESCE(f.status,'new')='new' AND f.hash_dist>? AND f.evidence_dir IS NOT NULL",
-            (config.EXACT_MAX_HASH_DIST,)).fetchall()
+            "WHERE COALESCE(f.status,'new')='new' AND (f.hash_dist>? OR f.clip_sim<?) AND f.evidence_dir IS NOT NULL",
+            (config.EXACT_MAX_HASH_DIST, config.HASH_HIT_MIN_CLIP)).fetchall()
         cache = {}
         for r in rows:
             theirs = glob.glob(os.path.join(r["evidence_dir"], "theirs.*"))
@@ -580,7 +580,7 @@ class App:
                 dropped += 1
         if cache and all(v is None for v in cache.values()):
             return 0   # our files are not reachable right now (drive unplugged?): try again next start
-        st.set_meta("lookalike_recheck_2", "1")
+        st.set_meta("lookalike_recheck_3", "1")
         st.commit()
         return dropped
 
