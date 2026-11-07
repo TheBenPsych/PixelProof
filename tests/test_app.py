@@ -330,3 +330,31 @@ def test_crawl_checks_stolen_sites_first(engine):
     assert call(base, a.token, "/api/crawl", {"pages": 2})["ok"]          # 127.0.0.1 is not on the watch list
     job = wait_job(base, a.token)
     assert job["total"] == 3 and any("marked as stolen from first (127.0.0.1)" in ln for ln in job["lines"])
+
+
+def test_old_lookalikes_are_rechecked(engine):
+    """Matches from before the double-check that are a different photo get marked Not a match, once."""
+    pytest.importorskip("cv2")
+    import shutil
+
+    from test_pixelproof import _detailed
+
+    a, base, port, data = engine
+    st = a.store
+    ours = st.db.execute("SELECT id, path FROM images LIMIT 1").fetchone()
+    _detailed(1).save(ours["path"])                  # make our file detailed enough to compare
+    ev_same, ev_diff = data / "evidence" / "A", data / "evidence" / "B"
+    ev_same.mkdir(parents=True), ev_diff.mkdir(parents=True)
+    _detailed(1).crop((100, 80, 700, 480)).save(ev_same / "theirs.jpg")
+    _detailed(7).save(ev_diff / "theirs.jpg")
+    ids = []
+    for page, ev in (("https://x.com/a", ev_same), ("https://x.com/b", ev_diff)):
+        fid, _ = st.save_finding(page, page + ".jpg", "x.com", ours["id"], "possible", 0.9, 30, "similar")
+        st.db.execute("UPDATE findings SET evidence_dir=? WHERE id=?", (str(ev), fid))
+        ids.append(fid)
+    st.set_meta("lookalike_recheck", "0")   # the app already did its one-time pass when it started
+    st.commit()
+    assert a.recheck_lookalikes() == 1
+    assert st.finding(ids[0])["status"] == "new" and st.finding(ids[1])["status"] == "not_match"
+    assert a.recheck_lookalikes() == 0
+    shutil.rmtree(ev_same), shutil.rmtree(ev_diff)

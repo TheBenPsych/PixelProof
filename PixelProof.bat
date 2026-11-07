@@ -10,7 +10,7 @@ if not exist ".venv\Scripts\python.exe" (
 set "VPY=.venv\Scripts\python.exe"
 
 rem After an update, add any new parts PixelProof needs (only runs when something is missing).
-"%VPY%" -c "import reportlab" >nul 2>nul
+"%VPY%" -c "import reportlab, cv2" >nul 2>nul
 if errorlevel 1 (
   echo Adding a few new parts PixelProof needs. This happens once and takes a minute...
   "%VPY%" -m pip install -q -r requirements.txt

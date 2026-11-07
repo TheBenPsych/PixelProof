@@ -171,6 +171,11 @@ Each picture gets two fingerprints:
 | Edited copy | flipped, or CLIP similarity 0.92 or higher |
 | Possible | CLIP similarity 0.89 to 0.92, needs a human look |
 
+Every Edited or Possible hit is then **double-checked**: the small details (corners, edges) of the two pictures
+must line up (at least 15 of them). A crop, filter, banner or resize of the same photo keeps dozens to
+hundreds; a different photo of the same person or scene keeps almost none and is dropped. If your file has
+moved and can't be opened, the hit is kept with a note.
+
 The starting values live in `pixelproof\config.py` and will be tuned on your real images.
 
 ## For developers

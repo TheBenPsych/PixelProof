@@ -120,3 +120,37 @@ class Clip:
 
     def embed(self, images: list[Image.Image]) -> np.ndarray:
         return self.embed_tensors([self.preprocess(im) for im in images])
+
+
+def same_photo_score(a: Image.Image, b: Image.Image, mirrored: bool = False) -> int | None:
+    """Double-checks a "looks alike" hit: counts small details (corners, edges) that line up between the two
+    pictures in the same layout. A crop, filter, logo or resize of the SAME photo keeps dozens of them; a
+    different photo of the same person or scene has almost none. Returns None if the checker isn't installed."""
+    try:
+        import cv2
+    except Exception:
+        return None
+    import numpy as np
+
+    def gray(im):
+        im = im.convert("L")
+        im.thumbnail((WORK_SIZE, WORK_SIZE))
+        return np.asarray(im)
+
+    if mirrored:
+        b = ImageOps.mirror(b)
+    ga, gb = gray(a), gray(b)
+    orb = cv2.ORB_create(nfeatures=2000, fastThreshold=10)
+    ka, da = orb.detectAndCompute(ga, None)
+    kb, db = orb.detectAndCompute(gb, None)
+    if da is None or db is None or len(ka) < 8 or len(kb) < 8:
+        return 0
+    pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(da, db, k=2)
+    good = [m for m, *n in pairs if n and m.distance < 0.8 * n[0].distance]
+    if len(good) < 8:
+        return 0
+    src = np.float32([ka[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst = np.float32([kb[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    # a crop / resize / small rotation of the same photo: one "similarity" move explains all the details
+    _, inl = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=6.0)
+    return int(inl.sum()) if inl is not None else 0

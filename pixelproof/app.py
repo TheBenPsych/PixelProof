@@ -181,6 +181,10 @@ class App:
         self.bye_at = 0.0
         self.base_urls: dict[str, str] = {}   # tests: domain -> http://host:port
         self.crawl_delay = 1.0                # seconds between pages on one site (be polite)
+        try:
+            self.recheck_lookalikes()
+        except Exception:
+            traceback.print_exc()
         self.news_session = None              # tests: a fake web session for the news feed
         self.news_stamps = None               # tests: which 15-minute news lists to read
 
@@ -489,6 +493,48 @@ class App:
 
         label = targets[0] if len(targets) == 1 else f"{len(targets)} sites"
         return self.start_job("crawl", label, work)
+
+    def recheck_lookalikes(self) -> int:
+        """Once, after the update that added the double-check: matches still waiting for review that only
+        "looked alike" are checked again, and different photos are marked "Not a match"."""
+        import glob
+
+        from .fingerprint import open_image
+        from .matcher import double_check
+
+        st = self.store
+        if st.get_meta("lookalike_recheck") == "1":
+            return 0
+        try:
+            import cv2  # noqa: F401  (the double-checker)
+        except Exception:
+            return 0
+        dropped = 0
+        rows = st.db.execute(
+            "SELECT f.id, f.evidence_dir, f.note, i.id AS iid, i.path FROM findings f JOIN images i ON i.id=f.image_id "
+            "WHERE COALESCE(f.status,'new')='new' AND f.hash_dist>? AND f.evidence_dir IS NOT NULL",
+            (config.EXACT_MAX_HASH_DIST,)).fetchall()
+        cache = {}
+        for r in rows:
+            theirs = glob.glob(os.path.join(r["evidence_dir"], "theirs.*"))
+            if not theirs:
+                continue
+            try:
+                img = open_image(theirs[0])[0]
+            except Exception:
+                continue
+            flipped = "flipped" in (r["note"] or "")
+            cat, _ = double_check(img, {"id": r["iid"], "path": r["path"]}, flipped, "possible", "", cache)
+            if cat is None:
+                st.set_status([r["id"]], "not_match")
+                st.db.execute("UPDATE findings SET note=? WHERE id=?",
+                              ((r["note"] or "") + "; different photo (double-check)", r["id"]))
+                dropped += 1
+        if cache and all(v is None for v in cache.values()):
+            return 0   # our files are not reachable right now (drive unplugged?): try again next start
+        st.set_meta("lookalike_recheck", "1")
+        st.commit()
+        return dropped
 
     def _infringers(self) -> tuple[dict, dict]:
         """Sites with matches: {site: number marked stolen}, {site: number of matches}. Banned sites are left out."""

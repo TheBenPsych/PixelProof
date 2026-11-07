@@ -328,3 +328,42 @@ def test_old_step1_database_upgrades(tmp_path):
     fid, found = store.save_finding("https://nypost.com/a/b/c", "https://i/x.jpg", "nypost.com", 1, "exact", 0.99, 0, "same")
     assert fid == 1 and found.startswith("2026-11-06")
     assert "Summary of all checks" in render_summary(store, tmp_path)
+
+
+def _detailed(seed, size=(800, 533)):
+    import random
+
+    from PIL import ImageDraw
+
+    rnd = random.Random(seed)
+    img = Image.new("RGB", size, (rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)))
+    d = ImageDraw.Draw(img)
+    for _ in range(160):
+        x, y = rnd.randrange(size[0]), rnd.randrange(size[1])
+        box = (x, y, x + rnd.randrange(10, 90), y + rnd.randrange(10, 90))
+        fill = tuple(rnd.randrange(256) for _ in range(3))
+        (d.rectangle if rnd.random() < 0.5 else d.ellipse)(box, fill=fill, outline=(0, 0, 0))
+    return img
+
+
+def test_double_check_tells_same_photo_from_lookalike(tmp_path):
+    """The AI can say two photos of the same person 'look alike'. The double-check keeps edited copies of the
+    same photo (crop, banner, colour, flip) and drops a different photo."""
+    pytest.importorskip("cv2")
+    from PIL import ImageDraw, ImageEnhance
+
+    from pixelproof.matcher import double_check
+
+    ours = _detailed(1)
+    ours.save(tmp_path / "ours.jpg", quality=92)
+    row = {"id": 1, "path": str(tmp_path / "ours.jpg")}
+    crop = ours.crop((150, 100, 650, 433)).resize((420, 280))
+    banner = ImageEnhance.Color(ours).enhance(1.7)
+    ImageDraw.Draw(banner).rectangle((0, 470, 800, 533), fill=(200, 0, 0))
+    for theirs, flipped in ((crop, False), (banner, False), (ImageOps.mirror(ours), True)):
+        cat, note = double_check(theirs, row, flipped, "possible", "similar, needs a human look", {})
+        assert cat == "edited" and "details line up" in note
+    assert double_check(_detailed(2), row, False, "possible", "x", {}) == (None, "")
+    # our file moved: the hit is kept, with a note
+    cat, note = double_check(crop, {"id": 2, "path": str(tmp_path / "gone.jpg")}, False, "possible", "x", {})
+    assert cat == "possible" and "could not be double-checked" in note
