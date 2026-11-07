@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -139,47 +141,66 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
                  if (not us_only or is_us(s)) and not is_banned(u, banned) and not is_unlikely(s)]
         log(f"News list {stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]} UTC: "
             f"{len(items)} articles to check.")
-        for b in range(0, len(items), 128):
-            if should_stop():
-                break
-            batch = items[b:b + 128]
-            with ThreadPoolExecutor(max_workers=32) as pool:
-                datas = list(pool.map(lambda it: _download(sess, it[2]), batch))
-            imgs, keep = [], []
-            for it, data in zip(batch, datas):
-                if not data:
-                    continue
-                try:
-                    img, (w, h) = open_image(data)
-                except Exception:
-                    continue
-                if min(w, h) < config.MIN_WEB_IMAGE_SIDE:
-                    continue
-                imgs.append(img)
-                keep.append(it)
-            res["articles"] += len(batch)
-            res["pictures"] += len(imgs)
-            for it, matches in zip(keep, match_images(imgs, store, clip) if imgs else []):
-                if not matches:
-                    continue
-                site, url, img_url = it
-                if url in seen_pages:
-                    continue
-                seen_pages.add(url)
-                log(f"Your image found on {site}: {url}")
-                before = store.db.execute("SELECT COALESCE(MAX(id),0) FROM findings").fetchone()[0]
-                r = check_target(url, store, clip, data_dir, log=lambda *a: None)
-                if r.error or not r.groups:
-                    # the article page could not be read: keep the match from the feed picture itself
-                    _save_feed_match(store, data_dir, site, url, img_url, matches[0], datas[batch.index(it)])
-                ids = [i for (i,) in store.db.execute("SELECT id FROM findings WHERE id>?", (before,))]
-                res["matches"] += 1
-                res["new_ids"] += ids
-                if add_watch and site not in res["new_sites"] and add_watch(site):
-                    res["new_sites"].append(site)
-                    log(f"Added {site} to your watch list.")
-            if on_progress:
-                on_progress(si, len(todo), res)
+        t_list = time.time()
+        t_cmp = 0.0
+        n_pics = 0
+
+        def fetch(it):   # download and read one picture (runs 32 at a time, while matching goes on)
+            data = _download(sess, it[2])
+            if not data:
+                return None
+            try:
+                img, (w, h) = open_image(data)
+            except Exception:
+                return None
+            if min(w, h) < config.MIN_WEB_IMAGE_SIDE:
+                return None
+            return it, data, img
+
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            pending = deque()
+            nxt = 0
+            while (nxt < len(items) or pending) and not should_stop():
+                while nxt < len(items) and len(pending) < 192:   # keep downloads running ahead
+                    pending.append(pool.submit(fetch, items[nxt]))
+                    nxt += 1
+                batch = [pending.popleft().result() for _ in range(min(64, len(pending)))]
+                got = [x for x in batch if x]
+                res["articles"] += len(batch)
+                res["pictures"] += len(got)
+                n_pics += len(got)
+                t0 = time.time()
+                found = match_images([x[2] for x in got], store, clip) if got else []
+                t_cmp += time.time() - t0
+                for (it, data, _), matches in zip(got, found):
+                    if not matches:
+                        continue
+                    site, url, img_url = it
+                    if url in seen_pages:
+                        continue
+                    seen_pages.add(url)
+                    log(f"Your image found on {site}: {url}")
+                    before = store.db.execute("SELECT COALESCE(MAX(id),0) FROM findings").fetchone()[0]
+                    r = check_target(url, store, clip, data_dir, log=lambda *a: None, sess=sess)
+                    if r.error or not r.groups:
+                        # the article page could not be read: keep the match from the feed picture itself
+                        _save_feed_match(store, data_dir, site, url, img_url, matches[0], data)
+                    ids = [i for (i,) in store.db.execute("SELECT id FROM findings WHERE id>?", (before,))]
+                    res["matches"] += 1
+                    res["new_ids"] += ids
+                    if add_watch and site not in res["new_sites"] and add_watch(site):
+                        res["new_sites"].append(site)
+                        log(f"Added {site} to your watch list.")
+                if on_progress:
+                    on_progress(si, len(todo), res)
+            for f in pending:
+                f.cancel()
+        took = max(time.time() - t_list, 0.1)
+        if items:
+            log(f"  done in {took:.0f}s: {n_pics} pictures read, comparing took {t_cmp:.1f}s, "
+                f"{len(items) / took * 60:.0f} articles per minute.")
+        if should_stop():
+            break
         done.add(stamp)
         store.set_meta("gdelt_done", json.dumps(sorted(done)[-2000:]))
         store.commit()

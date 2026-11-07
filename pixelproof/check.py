@@ -91,9 +91,11 @@ def _is_url(s: str) -> bool:
 
 
 def check_target(target: str, store: Store, clip, data_dir, log=print, seen_images: set | None = None,
-                 sess=None) -> CheckResult:
+                 sess=None, quick: bool = False) -> CheckResult:
     """seen_images (used by the crawler): picture links already checked and not ours. They are skipped,
-    and pictures on this page that turn out not to be ours are added to it."""
+    and pictures on this page that turn out not to be ours are added to it.
+    quick (used by the crawler): skip the sister-site and licence look-ups, which only matter for the
+    on-screen result of a single check and get slower as the list of checked pages grows."""
     target = target.strip().strip('"')
     res = CheckResult(target=target, checked_at=now())
     sources: list[tuple[str, bytes | str | None, str]] = []  # (label, bytes or path, error)
@@ -195,10 +197,12 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
         g.elsewhere = store.other_findings(g.image_id, res.page_url or q.source)
     if res.page_url:
         store.save_page(res.page_url, res.domain, key, len(queries), len(res.groups))
-        if key:
+        if key and not quick:
             res.sister_pages = [p for p in store.pages_with_key(key, res.page_url) if p["domain"] != res.domain]
     store.commit()
 
+    if quick:
+        return res
     # Sister sites and licensed use (read fresh each time, so edits to the .txt files count right away).
     sisters = load_sisters(data_dir, store)
     approvals = load_approvals(data_dir, sisters)

@@ -293,7 +293,8 @@ def crawl_site(domain: str, store, clip, data_dir, pages_per_site=20, recheck_da
             break
         site._wait()
         before = store.db.execute("SELECT COALESCE(MAX(id),0) FROM findings").fetchone()[0]
-        r = check_target(u, store, clip, data_dir, log=lambda *a: None, seen_images=seen_images, sess=site.sess)
+        r = check_target(u, store, clip, data_dir, log=lambda *a: None, seen_images=seen_images, sess=site.sess,
+                         quick=True)
         res.checked += 1
         res.t_page += r.t_page
         res.t_pictures += r.t_pictures

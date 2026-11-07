@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pixelproof"
-version = "0.5.7"
+version = "0.5.8"
 description = "Find where your images are used online. Runs fully on your PC."
 requires-python = ">=3.10"
 

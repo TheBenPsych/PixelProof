@@ -438,8 +438,11 @@ class App:
                 preprocess = staticmethod(clip.preprocess)
 
                 def embed(self, images):
+                    # Preparing the pictures (resizing etc.) runs at the same time for every site; only the
+                    # graphics card step itself is one at a time. (Before 0.5.8 everything waited in line.)
+                    tensors = [clip.preprocess(im) for im in images]
                     with lock:
-                        return clip.embed(images)
+                        return clip.embed_tensors(tensors)
 
                 def embed_tensors(self, tensors):
                     with lock:
