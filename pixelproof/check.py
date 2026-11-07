@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 from dataclasses import dataclass, field
 
 from . import config
@@ -22,6 +24,7 @@ class Group:
     best: object                       # the strongest Candidate
     copies: list = field(default_factory=list)  # (Query, Candidate), largest copy first
     match_id: str = ""
+    finding_id: int = 0
     found_at: str = ""                                # first time this page showed this photo
     licensed: str | None = None                       # site or company that makes it licensed
     elsewhere: list = field(default_factory=list)     # other pages where this photo was found before
@@ -87,6 +90,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
     target = target.strip().strip('"')
     res = CheckResult(target=target, checked_at=now())
     sources: list[tuple[str, bytes | str | None, str]] = []  # (label, bytes or path, error)
+    page_html: bytes | None = None
 
     if _is_url(target):
         res.page_url, res.domain = target, domain_of(target)
@@ -105,6 +109,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
         if direct is not None:
             sources.append((final_url, direct, ""))
         else:
+            page_html = html.encode("utf-8", "replace")
             urls = extract_image_urls(html, final_url)
             log(f"Found {len(urls)} pictures on the page. Downloading ...")
             sources.extend(download_images(urls, final_url, sess))
@@ -117,6 +122,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
         return res
 
     images, queries = [], []
+    raw: dict[str, bytes | str] = {}   # picture as downloaded (kept as evidence for matches)
     for label, data, err in sources:
         q = Query(source=label)
         if err or data is None:
@@ -134,6 +140,7 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
             res.skipped_small += 1
             continue
         q.thumb = thumbnail_jpeg(img)
+        raw[label] = data
         images.append(img)
         queries.append(q)
 
@@ -154,7 +161,11 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
         fid, found_at = store.save_finding(res.page_url or "", q.source, res.domain, g.image_id,
                                            g.best.category, g.best.clip_sim, g.best.hash_dist, note,
                                            path_key=key, thumb=q.thumb or None, width=q.width, height=q.height)
-        g.match_id, g.found_at = match_id(fid, found_at), found_at
+        g.match_id, g.found_at, g.finding_id = match_id(fid, found_at), found_at, fid
+        try:
+            save_evidence(store, fid, g.match_id, data_dir, res, q, raw.get(q.source), page_html)
+        except OSError as e:  # evidence is a bonus, never stop the check for it
+            log(f"Could not save the evidence copy for {g.match_id}: {e}")
         for _, c in g.copies:
             c.match_id = g.match_id
         g.elsewhere = store.other_findings(g.image_id, res.page_url or q.source)
@@ -171,3 +182,43 @@ def check_target(target: str, store: Store, clip, data_dir, log=print) -> CheckR
     for g in res.groups:
         g.licensed = approvals.licensed(g.row["photographer"], res.domain) if res.page_url else None
     return res
+
+
+def _ext_for(name: str, data: bytes) -> str:
+    sig = {b"\xff\xd8": ".jpg", b"\x89PNG": ".png", b"GIF8": ".gif", b"RIFF": ".webp", b"BM": ".bmp"}
+    for magic, ext in sig.items():
+        if data.startswith(magic):
+            return ext
+    m = re.search(r"\.(jpe?g|png|gif|webp|bmp|tiff?|avif|heic)(?:$|[?#])", name, re.I)
+    return "." + m.group(1).lower() if m else ".img"
+
+
+def save_evidence(store: Store, finding_id: int, mid: str, data_dir, res: CheckResult, q, data, page_html):
+    """The first time a match is found, keep their picture (exactly as downloaded) and the page,
+    with SHA-256 fingerprints, in data\\evidence\\<match ID>. Later checks never overwrite it."""
+    row = store.db.execute("SELECT evidence_dir FROM findings WHERE id=?", (finding_id,)).fetchone()
+    if row is None or row[0]:
+        return
+    if isinstance(data, str):            # a picture file on this PC
+        with open(data, "rb") as f:
+            data = f.read()
+    if not data:
+        return
+    folder = os.path.join(data_dir, "evidence", mid)
+    os.makedirs(folder, exist_ok=True)
+    their_file = os.path.join(folder, "theirs" + _ext_for(q.source, data))
+    with open(their_file, "wb") as f:
+        f.write(data)
+    their_sha = hashlib.sha256(data).hexdigest()
+    page_sha = None
+    if page_html:
+        with open(os.path.join(folder, "page.html"), "wb") as f:
+            f.write(page_html)
+        page_sha = hashlib.sha256(page_html).hexdigest()
+    lines = [f"Match ID: {mid}", f"Saved: {res.checked_at}", f"Page: {res.page_url or '(file on this PC)'}",
+             f"Picture: {q.source}", f"Picture SHA-256: {their_sha}"]
+    if page_sha:
+        lines.append(f"Page SHA-256: {page_sha}")
+    with open(os.path.join(folder, "info.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    store.save_evidence(finding_id, folder, their_sha, page_sha)

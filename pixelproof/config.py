@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "PixelProof"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # The app folder (the folder that holds install.bat). Data lives next to it in "data".
 APP_DIR = Path(__file__).resolve().parent.parent

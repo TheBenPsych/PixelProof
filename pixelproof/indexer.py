@@ -40,7 +40,8 @@ def _load(path: str, root: str, preprocess):
 
 
 def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: int = 8,
-                 log=print, progress=True) -> IndexResult:
+                 log=print, progress=True, on_progress=None, should_stop=None) -> IndexResult:
+    """on_progress(done, total) and should_stop() are used by the desktop app."""
     root = os.path.abspath(root)
     res = IndexResult()
     start = time.time()
@@ -61,8 +62,15 @@ def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: i
             refresh.append(path)
         else:
             todo.append(path)
-        if progress and res.found % 5000 == 0:
-            log(f"  ...found {res.found:,} so far")
+        if res.found % 5000 == 0:
+            if progress:
+                log(f"  ...found {res.found:,} so far")
+            if on_progress:
+                on_progress(0, 0, res.found)
+            if should_stop and should_stop():
+                res.stopped = True
+                res.seconds = time.time() - start
+                return res
     # Re-read names for files already done (cheap, no image opened) so naming fixes apply.
     for path in refresh:
         store.update_info(path, library.describe(path, root))
@@ -98,6 +106,12 @@ def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: i
                 store.commit()
                 if bar:
                     bar.update(len(items))
+                if on_progress:
+                    on_progress(min(i + batch_size, len(todo)), len(todo), res.found)
+                if should_stop and should_stop():
+                    res.stopped = True
+                    log("Stopped. Your progress is saved. Start the same folder again to carry on.")
+                    break
     except KeyboardInterrupt:
         res.stopped = True
         store.commit()

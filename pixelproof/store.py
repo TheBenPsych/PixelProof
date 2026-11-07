@@ -41,7 +41,13 @@ CREATE INDEX IF NOT EXISTS pages_path_key ON pages(path_key);
 
 # Columns added after step 1. Old libraries get them the first time step 2 opens them.
 FINDING_COLUMNS = {"last_seen": "TEXT", "path_key": "TEXT", "thumb": "BLOB",
-                   "width": "INTEGER", "height": "INTEGER", "times_seen": "INTEGER DEFAULT 1"}
+                   "width": "INTEGER", "height": "INTEGER", "times_seen": "INTEGER DEFAULT 1",
+                   # step 3: your decision, and the evidence saved the moment it was found
+                   "status": "TEXT DEFAULT 'new'", "status_at": "TEXT",
+                   "evidence_dir": "TEXT", "their_sha256": "TEXT", "page_sha256": "TEXT",
+                   "proof_path": "TEXT", "proof_sha256": "TEXT", "proof_at": "TEXT"}
+
+STATUSES = ("new", "stolen", "not_match")
 
 
 def now() -> str:
@@ -55,7 +61,9 @@ def match_id(finding_id: int, found_at: str) -> str:
 class Store:
     def __init__(self, data_dir: Path):
         self.dir = Path(data_dir)
-        self.db = sqlite3.connect(self.dir / "library.db")
+        # check_same_thread=False: the desktop app shares one connection between its
+        # helper threads (always behind its own lock).
+        self.db = sqlite3.connect(self.dir / "library.db", check_same_thread=False, timeout=30)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
@@ -147,6 +155,33 @@ class Store:
         return self.db.execute(
             "SELECT * FROM findings WHERE image_id=? AND COALESCE(NULLIF(page_url,''), image_url)<>? "
             "ORDER BY found_at", (image_id, not_page)).fetchall()
+
+    def finding(self, finding_id: int) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT f.*, i.path AS our_path, i.photographer, i.year, i.quarter, i.file_date, "
+            "i.width AS our_w, i.height AS our_h FROM findings f LEFT JOIN images i ON i.id=f.image_id "
+            "WHERE f.id=?", (int(finding_id),)).fetchone()
+
+    def set_status(self, finding_ids, status: str) -> int:
+        if status not in STATUSES:
+            raise ValueError(f"unknown status {status!r}")
+        ids = [int(i) for i in finding_ids]
+        if not ids:
+            return 0
+        q = "UPDATE findings SET status=?, status_at=? WHERE id IN (%s)" % ",".join("?" * len(ids))
+        cur = self.db.execute(q, [status, now(), *ids])
+        self.commit()
+        return cur.rowcount
+
+    def save_evidence(self, finding_id: int, evidence_dir: str, their_sha256: str | None,
+                      page_sha256: str | None) -> None:
+        self.db.execute("UPDATE findings SET evidence_dir=?, their_sha256=?, page_sha256=? WHERE id=?",
+                        (evidence_dir, their_sha256, page_sha256, int(finding_id)))
+
+    def save_proof(self, finding_id: int, path: str, sha256: str) -> None:
+        self.db.execute("UPDATE findings SET proof_path=?, proof_sha256=?, proof_at=? WHERE id=?",
+                        (path, sha256, now(), int(finding_id)))
+        self.commit()
 
     def all_findings(self) -> list[sqlite3.Row]:
         return self.db.execute(
