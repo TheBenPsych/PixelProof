@@ -362,3 +362,22 @@ def test_old_lookalikes_are_rechecked(engine):
     assert st.finding(ids[0])["status"] == "new" and st.finding(ids[1])["status"] == "not_match"
     assert a.recheck_lookalikes() == 0
     shutil.rmtree(ev_same), shutil.rmtree(ev_diff)
+
+
+def test_remove_unlikely_sites(engine):
+    a, base, port, data = engine
+    t = a.token
+    call(base, t, "/api/watch", {"sites": ["wral.com", "nih.gov", "mit.edu", "hugedomains.com", "bbc.co.uk",
+                                           "elnuevodia.com", "noticel.pr", "google.com", "127.0.0.1"]})
+    # a site where we already found something is always kept
+    st = a.store
+    img = st.db.execute("SELECT id FROM images LIMIT 1").fetchone()[0]
+    st.save_finding("https://hugedomains.com/x", "https://hugedomains.com/x.jpg", "hugedomains.com", img, "exact", 1.0, 0, "")
+    st.commit()
+    r = call(base, t, "/api/unlikely", {})
+    assert sorted(r["sites"]) == ["127.0.0.1", "bbc.co.uk", "google.com", "mit.edu", "nih.gov"] and not r["removed"]
+    assert call(base, t, "/api/state")["watch"][0] == "wral.com"          # preview changes nothing
+    r = call(base, t, "/api/unlikely", {"apply": True})
+    assert r["removed"]
+    assert call(base, t, "/api/state")["watch"] == ["wral.com", "hugedomains.com", "elnuevodia.com", "noticel.pr"]
+    assert "nih.gov" in (data / "removed-from-watch.txt").read_text()

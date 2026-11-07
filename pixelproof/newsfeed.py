@@ -20,14 +20,15 @@ from . import config
 from .fingerprint import open_image, thumbnail_jpeg
 from .matcher import match_images
 from .page import domain_of, is_banned, load_banned, session
+from .sites import is_unlikely
 
 GDELT = "http://data.gdeltproject.org/gdeltv2/"
 # GKG 2.1 columns (tab separated, no header row)
 COL_SOURCE, COL_URL, COL_IMAGE = 3, 4, 18
 
-# "US only" is decided by the site's ending. .com/.org/.net are mostly US but not always,
+# "US only" (Puerto Rico included) is decided by the site's ending. .com/.org/.net are mostly US but not always,
 # so well-known foreign .com news sites are left out by name.
-US_ENDINGS = (".com", ".org", ".net", ".us", ".edu", ".gov", ".news", ".tv", ".fm", ".am", ".radio", ".media",
+US_ENDINGS = (".com", ".org", ".net", ".us", ".pr", ".news", ".tv", ".fm", ".am", ".radio", ".media",
               ".nyc", ".la", ".info", ".co", ".io")
 NOT_US = set("""
 aljazeera.com scmp.com rt.com thestar.com indiatimes.com hindustantimes.com ndtv.com thehindu.com
@@ -135,7 +136,7 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
             log(f"Could not read the news list for {stamp}: {type(e).__name__}: {e}")
             continue
         items = [(s, u, i) for s, u, i in items
-                 if (not us_only or is_us(s)) and not is_banned(u, banned)]
+                 if (not us_only or is_us(s)) and not is_banned(u, banned) and not is_unlikely(s)]
         log(f"News list {stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[8:10]}:{stamp[10:12]} UTC: "
             f"{len(items)} articles to check.")
         for b in range(0, len(items), 128):

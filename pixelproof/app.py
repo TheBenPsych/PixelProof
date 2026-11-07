@@ -619,8 +619,10 @@ class App:
             store.load_indexes(clip.dim)
             watch = set(_read_sites(self.data_dir / WATCH_FILE))
 
+            from .sites import is_unlikely
+
             def add_watch(site):
-                if site in watch:
+                if site in watch or is_unlikely(site):
                     return False
                 watch.add(site)
                 self.watch([site])
@@ -712,6 +714,24 @@ class App:
             have = [h for h in have if h not in sites] if remove else have + [s for s in sites if s not in have]
             _write_sites(path, have, WATCH_TEMPLATE)
         return {"ok": True}
+
+    def unlikely(self, apply: bool = False) -> dict:
+        """Sites on the watch list that will practically never have your photos (domain sellers, software,
+        science, shops, government, giant platforms). Sites where you already have matches are kept.
+        With apply=True they are removed, and saved in removed-from-watch.txt so they can be imported back."""
+        from .sites import is_unlikely
+
+        path = self.data_dir / WATCH_FILE
+        with self.lock:
+            have = _read_sites(path)
+            stolen, found = self._infringers()
+            drop = [s for s in have if is_unlikely(s) and s not in found and s not in stolen]
+            if apply and drop:
+                _write_sites(path, [s for s in have if s not in drop], WATCH_TEMPLATE)
+                with open(self.data_dir / "removed-from-watch.txt", "a", encoding="utf-8") as f:
+                    f.write(f"# Removed by 'Remove unlikely sites' on {time.strftime('%Y-%m-%d %H:%M')}. "
+                            "Import this file to add them back.\n" + "\n".join(drop) + "\n")
+        return {"ok": True, "sites": drop, "keep": len(have) - len(drop), "removed": bool(apply and drop)}
 
     def import_sites(self, text: str, into: str) -> dict:
         from .sites import clean_site
@@ -961,6 +981,8 @@ def route(app: App, path: str, b: dict) -> dict:
         return app.check(b.get("targets") or [b.get("target", "")])
     if path == "/api/crawl":
         return app.crawl(b.get("sites") or None, int(b.get("pages") or 20), int(b.get("workers") or 12))
+    if path == "/api/unlikely":
+        return app.unlikely(bool(b.get("apply")))
     if path == "/api/news":
         return app.news(b.get("hours") or 3, bool(b.get("us_only", True)))
     if path == "/api/index":

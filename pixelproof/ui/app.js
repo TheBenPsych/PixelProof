@@ -390,7 +390,7 @@ function crawlView(main) {
       el("button", {"class": "btn ink big", type: "button", text: "Start crawling", disabled: crawlable.length ? null : true, onclick: function () {
         api("/api/crawl", {pages: Number(per.value), workers: Number(speed.value)}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
       }})]),
-    estEl
+    el("div", {"class": "row-between"}, [estEl, el("button", {"class": "btn small", type: "button", text: "Remove unlikely sites", onclick: openUnlikely})])
   ]));
   var hrs = el("select", {"aria-label": "How far back"}, [[1, "Last 1 hour"], [3, "Last 3 hours"], [6, "Last 6 hours"], [24, "Last 24 hours"], [72, "Last 3 days"]].map(function (o) { return el("option", {value: String(o[0]), text: o[1], selected: o[0] === 3 ? true : null}); }));
   var us = el("input", {type: "checkbox", checked: true, id: "us-only", style: "flex:none;width:16px;height:16px;margin:0"});
@@ -398,7 +398,7 @@ function crawlView(main) {
     el("h2", {text: "Find new sites from the news"}),
     el("p", {text: "Reads a free list of every news article published worldwide (from the GDELT project, updated every 15 minutes) and checks each article's main picture against your library. When one is yours, PixelProof checks the whole article, saves the evidence, and adds the site to your watch list by itself."}),
     el("div", {"class": "urlrow"}, [el("div", {"class": "lcard", style: "padding:0;flex:1;min-width:220px"}, [el("div", {"class": "add"}, [hrs,
-        el("label", {"for": "us-only", style: "flex:none;width:auto;padding:0 6px;display:flex;gap:6px;align-items:center;white-space:nowrap;font-size:13.5px"}, [us, "US sites only"])])]),
+        el("label", {"for": "us-only", style: "flex:none;width:auto;padding:0 6px;display:flex;gap:6px;align-items:center;white-space:nowrap;font-size:13.5px"}, [us, "US sites only (with Puerto Rico)"])])]),
       el("button", {"class": "btn ink big", type: "button", text: "Check the news", onclick: function () {
         api("/api/news", {hours: Number(hrs.value), us_only: us.checked}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
       }})]),
@@ -425,6 +425,18 @@ function crawlView(main) {
 }
 
 /* ---------- SITE LISTS ---------- */
+function openUnlikely() {
+  api("/api/unlikely", {}).then(function (r) {
+    if (!r.sites.length) return toast("Nothing to remove. Every site on your watch list could have your photos.");
+    dialog("Remove unlikely sites", [
+      el("p", {text: plural(r.sites.length, "site") + " on your watch list will practically never have your photos: sites outside the US (Puerto Rico stays), government and school sites (.gov, .edu), domain sellers, software and science sites, shops, and giant platforms the crawler can't visit anyway. " + plural(r.keep, "site") + " stay."}),
+      el("p", {"class": "muted", text: "Sites where you already have matches are always kept. The removed sites are saved in removed-from-watch.txt in your data folder, so you can import them back."}),
+      el("div", {"class": "mono", style: "max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6", text: r.sites.join(", ")})
+    ], [cancel(), el("button", {"class": "btn ink", type: "button", text: "Remove " + plural(r.sites.length, "site"), onclick: function () {
+      api("/api/unlikely", {apply: true}).then(function (x) { closeDlg(); toast("Removed " + plural(x.sites.length, "site") + ". " + plural(x.keep, "site") + " left on your watch list."); refresh(); });
+    }})]);
+  });
+}
 function listsView(main) {
   var d = S.data;
   main.appendChild(el("div", {"class": "head"}, [el("div", {}, [el("h1", {text: "Site lists"}), el("p", {text: "These lists decide what PixelProof hides, what counts as licensed, and which sites belong together."})]),
@@ -459,7 +471,8 @@ function listsView(main) {
       sisterItems, sisterAdd()),
     lc("Sites to watch", "Sites known for using images without permission. The crawler visits these. The news feed adds sites here by itself when it finds your images.",
       d.watch.map(function (s) { return li(s, function () { act("/api/watch", {sites: [s], remove: true}, "Removed"); }); }),
-      addRow("site to watch", function (v) { act("/api/watch", {sites: [v]}, "Added to the watch list"); }))
+      el("div", {}, [addRow("site to watch", function (v) { act("/api/watch", {sites: [v]}, "Added to the watch list"); }),
+        d.watch.length ? el("button", {"class": "btn small", type: "button", style: "margin-top:8px", text: "Remove unlikely sites", onclick: openUnlikely}) : null]))
   ]));
   function sisterAdd() {
     var name = el("input", {type: "text", placeholder: "Company name"}), sites = el("input", {type: "text", placeholder: "site1.com, site2.com"});

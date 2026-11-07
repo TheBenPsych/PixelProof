@@ -246,3 +246,37 @@ def add_approval(data_dir, photographer: str, sites: list[str]) -> list[str]:
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.replace(tmp, path)
     return new
+
+
+# Sites that will practically never re-publish news or editorial photos: domain sellers, software and
+# developer sites, science publishers, shops, apps, ad and link services, photo-licensing and portfolio
+# services (they sell or show photos, they don't take them). Used by "Remove unlikely sites".
+UNLIKELY = set("""
+brandbucket.com afternic.com hugedomains.com namebright.com buydomains.com domainmarket.com expireddomains.com
+dropcatch.com perfectdomain.com namepros.com sedo.com dan.com godaddy.com namecheap.com
+nginx.com nginx.org php.net apache.org joomla.org ubuntu.com android.com enable-javascript.com vercel.app
+netlify.app mystrikingly.com squarespace.com weebly.com wix.com themeforest.net disqus.com addtoany.com
+addthis.com list-manage.com ggpht.com fbsbx.com pinimg.com forms.gle g.page safety.google blog.google
+aboutads.info networkadvertising.org clickbank.net alexa.com lycos.com live.com statista.com surveymonkey.com
+arxiv.org doi.org jstor.org wiley.com sagepub.com plos.org academia.edu creativecommons.org slideshare.net
+loc.gov eventbrite.com kickstarter.com indiegogo.com gofundme.com change.org foursquare.com waze.com
+nextdoor.com quizlet.com bbb.org goodreads.com barnesandnoble.com audible.com patreon.com vistaprint.com
+bestbuy.com homedepot.com lowes.com costco.com wayfair.com macys.com nordstrom.com kohls.com redfin.com
+trulia.com apartments.com weather.com accuweather.com wunderground.com espnplus.com fubo.tv sling.com roku.com
+steampowered.com nintendo.com playstation.com disney.com bandcamp.com ted.com instructables.com
+offset.com dreamstime.com apimages.com stocksy.com smugmug.com zenfolio.com pixieset.com vsco.co
+dribbble.com artstation.com myspace.com
+""".split())
+UNLIKELY_ENDINGS = (".gov", ".edu", ".mil", ".google")
+
+
+def is_unlikely(domain: str) -> bool:
+    """True for sites PixelProof should not watch: see UNLIKELY, plus government and school sites (.gov, .edu)
+    and sites outside the US (Puerto Rico counts as US)."""
+    from .crawl import TOO_BIG
+    from .newsfeed import is_us
+
+    d = (domain or "").lower()
+    if d.endswith(UNLIKELY_ENDINGS) or not is_us(d):
+        return True
+    return any(d == x or d.endswith("." + x) for x in UNLIKELY | TOO_BIG)
