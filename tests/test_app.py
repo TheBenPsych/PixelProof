@@ -382,3 +382,33 @@ def test_remove_unlikely_sites(engine):
     assert r["removed"]
     assert call(base, t, "/api/state")["watch"] == ["wral.com", "hugedomains.com", "elnuevodia.com", "noticel.pr"]
     assert "nih.gov" in (data / "removed-from-watch.txt").read_text()
+
+
+def test_remove_photographers(engine, lib):  # noqa: F811
+    a, base, port, data = engine
+    root, files, _ = lib
+    url = f"http://127.0.0.1:{port}/ixp/993/p/anchor-article/"
+    call(base, a.token, "/api/check", {"targets": [url]})
+    wait_job(base, a.token)
+    st = call(base, a.token, "/api/state")
+    assert {p["name"] for p in st["library"]["photographers"]} == {"Maya Chen", "Luis Ortega"}
+
+    preview = call(base, a.token, "/api/remove_people", {"names": ["Maya Chen"]})
+    assert preview["images"] == 2 and preview["matches"] == 1 and not preview["removed"]
+    assert call(base, a.token, "/api/state")["library"]["images"] == 3       # nothing removed yet
+    done = call(base, a.token, "/api/remove_people", {"names": ["Maya Chen"], "apply": True})
+    assert done["removed"]
+    st = call(base, a.token, "/api/state")
+    assert [p["name"] for p in st["library"]["photographers"]] == ["Luis Ortega"]
+    assert all(f["photographer"] != "Maya Chen" for f in st["findings"]) and len(st["findings"]) == 1
+    assert files["IMG_5102.jpg"].exists()                                   # photo files untouched
+
+    # fingerprinting the whole folder again leaves her out...
+    call(base, a.token, "/api/index", {"folder": str(root)})
+    job = wait_job(base, a.token)
+    assert any("Left out 3 images" in ln for ln in job["lines"]), job["lines"]   # 2 photos + 1 broken file
+    assert call(base, a.token, "/api/state")["library"]["images"] == 1
+    # ...until her own folder is picked again
+    call(base, a.token, "/api/index", {"folder": str(root / "Maya Chen")})
+    wait_job(base, a.token)
+    assert call(base, a.token, "/api/state")["library"]["images"] == 3

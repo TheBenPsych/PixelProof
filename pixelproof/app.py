@@ -383,8 +383,18 @@ class App:
             def prog(done, total, found):
                 job.done, job.total, job.found = done, total, found
 
+            # photographers removed in My images stay out, unless you picked their own folder again
+            removed = set(json.loads(store.get_meta("removed_people", "[]")))
+            from .library import clean_photographer
+
+            picked = {clean_photographer(part).lower() for part in Path(folder).parts if part.strip(":\\/")}
+            back = removed & picked
+            if back:
+                removed -= back
+                store.set_meta("removed_people", json.dumps(sorted(removed)))
+                store.commit()
             res = index_folder(folder, store, clip, log=job.log, progress=False, on_progress=prog,
-                               should_stop=lambda: job.stop)
+                               should_stop=lambda: job.stop, skip_people=removed)
             job.result = {"found": res.found, "added": res.added, "skipped": res.skipped, "failed": res.failed,
                           "seconds": round(res.seconds), "stopped": res.stopped}
             job.log(f"Done. New or changed images: {res.added:,}. Already done before: {res.skipped:,}."
@@ -755,6 +765,37 @@ class App:
                             "Import this file to add them back.\n" + "\n".join(drop) + "\n")
         return {"ok": True, "sites": drop, "keep": len(have) - len(drop), "removed": bool(apply and drop)}
 
+    def remove_people(self, names: list[str], apply: bool = False) -> dict:
+        """Removes photographers from PixelProof: their fingerprints and the matches found for them.
+        Their photo files are never touched. They stay out of later fingerprinting runs, unless you pick
+        their own folder again in My images. Without apply, only counts what would be removed."""
+        names = [n for n in dict.fromkeys(n.strip() for n in names or []) if n]
+        if not names:
+            return {"ok": False, "error": "Pick at least one photographer."}
+        with self.lock:
+            if self.job and self.job.state == "running":
+                return {"ok": False, "error": "PixelProof is still busy with: " + self.job.label}
+            db = self.store.db
+            marks = ",".join("?" * len(names))
+            who = f"COALESCE(photographer,'Unknown') IN ({marks})"
+            images = db.execute(f"SELECT COUNT(*) FROM images WHERE {who}", names).fetchone()[0]
+            mine = f"image_id IN (SELECT id FROM images WHERE {who})"
+            matches = db.execute(f"SELECT COUNT(*) FROM findings WHERE {mine}", names).fetchone()[0]
+            stolen = db.execute(f"SELECT COUNT(*) FROM findings WHERE {mine} AND status='stolen'",
+                                names).fetchone()[0]
+            out = {"ok": True, "people": names, "images": images, "matches": matches, "stolen": stolen,
+                   "removed": False}
+            if apply:
+                db.execute(f"DELETE FROM findings WHERE {mine}", names)
+                db.execute(f"DELETE FROM images WHERE {who}", names)
+                removed = set(json.loads(self.store.get_meta("removed_people", "[]")))
+                removed |= {n.lower() for n in names}
+                self.store.set_meta("removed_people", json.dumps(sorted(removed)))
+                self.store.mark_dirty()     # the search index is rebuilt at the start of the next check
+                self.store.commit()
+                out["removed"] = True
+        return out
+
     def import_sites(self, text: str, into: str) -> dict:
         from .sites import clean_site
 
@@ -1007,6 +1048,8 @@ def route(app: App, path: str, b: dict) -> dict:
         return app.unlikely(bool(b.get("apply")))
     if path == "/api/news":
         return app.news(b.get("hours") or 3, bool(b.get("us_only", True)))
+    if path == "/api/remove_people":
+        return app.remove_people(b.get("names") or [], bool(b.get("apply")))
     if path == "/api/index":
         return app.index(b.get("folder", ""))
     if path == "/api/bye":

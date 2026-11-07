@@ -380,9 +380,9 @@ def test_double_check_tells_same_photo_from_lookalike(tmp_path):
         cat, note = double_check(theirs, row, flipped, "possible", "similar, needs a human look", {})
         assert cat == "edited" and "details line up" in note
     assert double_check(_detailed(2), row, False, "possible", "x", {}) == (None, "")
-    # our file moved: the hit is kept, with a note
-    cat, note = double_check(crop, {"id": 2, "path": str(tmp_path / "gone.jpg")}, False, "possible", "x", {})
-    assert cat == "possible" and "could not be double-checked" in note
+    # our file moved: an edited hit is kept with a note (a "possible" one is dropped, see below)
+    cat, note = double_check(crop, {"id": 2, "path": str(tmp_path / "gone.jpg")}, False, "edited", "x", {})
+    assert cat == "edited" and "could not be double-checked" in note
 
 
 def test_double_check_ignores_a_shared_flag():
@@ -459,3 +459,13 @@ def test_real_model_uses_the_quick_way():
     assert c._setup_fast()
     c.preprocess = open_clip.image_transform(256, is_train=False)   # a different preparation: not used
     assert not c._setup_fast()
+
+
+def test_missing_file_drops_only_unproven_lookalikes():
+    from pixelproof.matcher import double_check
+
+    row = {"id": 1, "path": "/no/such/file.jpg"}
+    img = make_photo(3)
+    assert double_check(img, row, False, "possible", "similar", {}) == (None, "")
+    cat, note = double_check(img, row, False, "edited", "looks edited", {})
+    assert cat == "edited" and "not found" in note

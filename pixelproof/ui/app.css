@@ -280,3 +280,8 @@ tr.sub td:first-child{padding-left:32px}
   .sbs{grid-template-columns:1fr}
 }
 @media (prefers-reduced-motion: reduce){.toast,.pair{transition:none}.pair:hover{transform:none}.jobcard .spin,.jobcard .bar.indet i{animation:none}}
+.libtools{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:18px 0 10px}
+.libtools p{margin:0}
+th.chk,td.chk{width:34px;padding-right:0}
+th.chk input,td.chk input{width:16px;height:16px;margin:0;cursor:pointer}
+.missing{padding:18px;font-size:13px;line-height:1.5;color:var(--muted,#9aa);text-align:center;word-break:break-all}

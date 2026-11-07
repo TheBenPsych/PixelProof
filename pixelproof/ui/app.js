@@ -38,6 +38,12 @@ function el(tag, attrs, kids) {
   (kids || []).forEach(function (c) { if (c != null && c !== false) e.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
   return e;
 }
+function oursImg(m) {   // our file can be gone (moved, renamed or deleted since it was fingerprinted)
+  return el("img", {src: pic("ours", m.image_id, 900), alt: "Our image", onerror: function () {
+    var note = el("div", {"class": "missing", text: "Our file is not in its folder any more (moved, renamed or deleted). " + (m.our_path || "")});
+    if (this.parentNode) this.parentNode.replaceChild(note, this);
+  }});
+}
 function F() { return S.data ? S.data.findings : []; }
 function byId(id) { return F().filter(function (m) { return m.id === id; })[0]; }
 function shown(m) { return !m.banned; }
@@ -220,7 +226,7 @@ function review(main) {
   var oursSize = m.our_w ? m.our_w + " × " + m.our_h : "", theirsSize = m.width ? m.width + " × " + m.height : "";
   if (S.mode === "side") {
     stage.appendChild(el("div", {"class": "sbs"}, [
-      el("div", {"class": "side o"}, [el("div", {"class": "tag"}, [el("span", {"class": "o", text: "OURS"}), el("span", {"class": "m", text: oursSize})]), el("div", {"class": "frame"}, [el("img", {src: pic("ours", m.image_id, 900), alt: "Our image"})])]),
+      el("div", {"class": "side o"}, [el("div", {"class": "tag"}, [el("span", {"class": "o", text: "OURS"}), el("span", {"class": "m", text: oursSize})]), el("div", {"class": "frame"}, [oursImg(m)])]),
       el("div", {"class": "side t"}, [el("div", {"class": "tag"}, [el("span", {"class": "t", text: "THEIRS"}), el("span", {"class": "m", text: theirsSize})]), el("div", {"class": "frame"}, [el("img", {src: pic("theirs", m.id, 900), alt: "Their image"})])])
     ]));
   } else {
@@ -228,7 +234,7 @@ function review(main) {
     var line = el("div", {"class": "lineH", style: "left:50%"});
     var range = el("input", {type: "range", min: "0", max: "100", value: "50", "aria-label": "Drag to compare ours and theirs"});
     range.addEventListener("input", function () { b.style.clipPath = "inset(0 0 0 " + range.value + "%)"; line.style.left = range.value + "%"; });
-    stage.appendChild(el("div", {"class": "swipe"}, [el("img", {src: pic("ours", m.image_id, 900), alt: "Our image"}), b, line, el("span", {"class": "lbl o", text: "OURS"}), el("span", {"class": "lbl t", text: "THEIRS"}), range]));
+    stage.appendChild(el("div", {"class": "swipe"}, [oursImg(m), b, line, el("span", {"class": "lbl o", text: "OURS"}), el("span", {"class": "lbl t", text: "THEIRS"}), range]));
   }
   if (m.licensed) {
     stage.appendChild(el("div", {"class": "callout ok"}, [el("b", {text: "Licensed. "}), m.domain + " is approved for " + m.photographer + " (" + m.licensed + "). It is not counted as stolen."]));
@@ -437,6 +443,26 @@ function openUnlikely() {
     }})]);
   });
 }
+function openRemovePeople(names) {
+  if (!names.length) return;
+  api("/api/remove_people", {names: names}).then(function (r) {
+    if (r.ok === false) return toast(r.error);
+    var body = [
+      el("p", {text: "This takes " + (names.length === 1 ? names[0] : plural(names.length, "photographer")) + " out of PixelProof: " + plural(r.images, "fingerprint") + (r.matches ? " and the " + plural(r.matches, "match", "matches") + " found for them" : "") + "."}),
+      el("p", {"class": "muted", text: "Your photo files are not touched. Saved evidence folders stay on your PC. Later fingerprinting runs leave them out, unless you pick their own folder again in Add a folder."})
+    ];
+    if (names.length > 1) body.push(el("div", {"class": "mono", style: "max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.6", text: names.join(", ")}));
+    if (r.stolen) body.push(el("p", {style: "color:var(--exact);font-weight:600", text: "Careful: " + plural(r.stolen, "match", "matches") + " among them are marked as stolen. Download their Proof of Discovery first if you still need it."}));
+    dialog("Remove from PixelProof", body, [cancel(), el("button", {"class": "btn ink", type: "button", text: "Remove " + plural(names.length, "photographer"), onclick: function () {
+      api("/api/remove_people", {names: names, apply: true}).then(function (x) {
+        closeDlg();
+        if (x.ok === false) return toast(x.error);
+        toast("Removed " + plural(names.length, "photographer") + " (" + plural(x.images, "image") + ").");
+        refresh();
+      });
+    }})], true);
+  });
+}
 function listsView(main) {
   var d = S.data;
   main.appendChild(el("div", {"class": "head"}, [el("div", {}, [el("h1", {text: "Site lists"}), el("p", {text: "These lists decide what PixelProof hides, what counts as licensed, and which sites belong together."})]),
@@ -499,17 +525,40 @@ function libView(main) {
   ]));
   var ps = lib.photographers;
   if (!ps.length) { main.appendChild(el("div", {"class": "empty", text: "No images yet."})); return; }
+  var picked = {};
+  var removeBtn = el("button", {"class": "btn danger", type: "button", text: "Remove checked photographers…", disabled: true, onclick: function () { openRemovePeople(Object.keys(picked)); }});
+  function sync() {
+    var n = Object.keys(picked).length;
+    removeBtn.disabled = !n;
+    removeBtn.textContent = n ? "Remove " + plural(n, "photographer") + "…" : "Remove checked photographers…";
+    all.checked = n && n === ps.length; all.indeterminate = n > 0 && n < ps.length;
+  }
+  var boxes = [];
+  var all = el("input", {type: "checkbox", "aria-label": "Check all photographers", onclick: function (e) {
+    e.stopPropagation();
+    boxes.forEach(function (b) { b.box.checked = all.checked; if (all.checked) picked[b.name] = 1; else delete picked[b.name]; });
+    sync();
+  }});
   var tb = el("tbody");
   ps.slice().sort(function (a, b) { return b.images - a.images; }).forEach(function (p) {
     var ms = F().filter(function (m) { return shown(m) && m.photographer === p.name; });
+    var box = el("input", {type: "checkbox", "aria-label": "Check " + p.name, onclick: function (e) {
+      e.stopPropagation();
+      if (box.checked) picked[p.name] = 1; else delete picked[p.name];
+      sync();
+    }});
+    boxes.push({box: box, name: p.name});
     tb.appendChild(el("tr", {"class": "click", tabindex: "0", onclick: function () { go("ph", {ph: p.name, period: "all"}); }}, [
+      el("td", {"class": "chk", onclick: function (e) { e.stopPropagation(); }}, [box]),
       el("td", {}, [el("div", {style: "display:flex;gap:10px;align-items:center"}, [avatar(p.name, true), el("b", {text: p.name})])]),
       el("td", {"class": "n", text: p.images.toLocaleString()}),
       el("td", {text: p.y1 ? (p.y1 === p.y2 ? String(p.y1) : p.y1 + "–" + p.y2) : "–"}),
       el("td", {"class": "n", text: String(ms.length)})
     ]));
   });
-  main.appendChild(el("div", {"class": "tablewrap"}, [el("table", {}, [el("thead", {}, [el("tr", {}, ["Photographer", "Images", "Years", "Matches"].map(function (h) { return el("th", {text: h}); }))]), tb])]));
+  main.appendChild(el("div", {"class": "libtools"}, [el("p", {"class": "muted", text: "Check photographers to take them out of PixelProof (your photo files are not touched)."}), removeBtn]));
+  var heads = [el("th", {"class": "chk"}, [all])].concat(["Photographer", "Images", "Years", "Matches"].map(function (h) { return el("th", {text: h}); }));
+  main.appendChild(el("div", {"class": "tablewrap"}, [el("table", {}, [el("thead", {}, [el("tr", {}, heads)]), tb])]));
   if (lib.errors) main.appendChild(el("p", {"class": "muted", text: plural(lib.errors, "file") + " could not be read (damaged or not really pictures)."}));
 }
 
@@ -530,7 +579,7 @@ function proofSheet(m) {
   return el("div", {"class": "proof"}, [
     el("div", {"class": "ph"}, [el("div", {}, [el("h4", {text: "Proof of Discovery"}), el("div", {style: "font-size:11px;opacity:.75", text: "PixelProof image use record"})]), el("span", {"class": "id", text: m.match_id})]),
     el("div", {"class": "imgs"}, [
-      el("figure", {"class": "o"}, [el("div", {}, [el("img", {src: pic("ours", m.image_id, 900), alt: "Our image"})]), el("figcaption", {text: "Ours: " + m.file_name})]),
+      el("figure", {"class": "o"}, [el("div", {}, [oursImg(m)]), el("figcaption", {text: "Ours: " + m.file_name})]),
       el("figure", {"class": "t"}, [el("div", {}, [el("img", {src: pic("theirs", m.id, 900), alt: "Their image"})]), el("figcaption", {text: "Theirs: as found on " + (m.domain || "-")})])
     ]),
     el("table", {}, [el("tbody", {}, [

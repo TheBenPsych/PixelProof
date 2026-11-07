@@ -24,6 +24,7 @@ class IndexResult:
     failed: int = 0
     seconds: float = 0.0
     stopped: bool = False
+    left_out: int = 0      # images of photographers you removed from PixelProof
 
 
 def _load(path: str, root: str, preprocess):
@@ -40,8 +41,10 @@ def _load(path: str, root: str, preprocess):
 
 
 def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: int = 8,
-                 log=print, progress=True, on_progress=None, should_stop=None) -> IndexResult:
-    """on_progress(done, total) and should_stop() are used by the desktop app."""
+                 log=print, progress=True, on_progress=None, should_stop=None,
+                 skip_people: set[str] | None = None) -> IndexResult:
+    """on_progress(done, total) and should_stop() are used by the desktop app.
+    skip_people: photographer names (lower case) to leave out, because they were removed in the app."""
     root = os.path.abspath(root)
     res = IndexResult()
     start = time.time()
@@ -52,6 +55,9 @@ def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: i
     known = store.known_files()
     todo, refresh = [], []
     for path in library.scan(root):
+        if skip_people and (library.describe(path, root).photographer or "unknown").lower() in skip_people:
+            res.left_out += 1
+            continue
         res.found += 1
         try:
             st = os.stat(path)
@@ -75,6 +81,8 @@ def index_folder(root: str, store: Store, clip, batch_size: int = 64, workers: i
     for path in refresh:
         store.update_info(path, library.describe(path, root))
     store.commit()
+    if res.left_out:
+        log(f"Left out {res.left_out:,} images of photographers you removed.")
     log(f"Found {res.found:,} images. Already done: {res.skipped:,}. To fingerprint now: {len(todo):,}.")
     if not todo:
         res.seconds = time.time() - start

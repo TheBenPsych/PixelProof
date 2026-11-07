@@ -112,6 +112,8 @@ def double_check(theirs, row, mirrored, cat, note, cache):
         except Exception:
             cache[key] = None
     if cache[key] is None:
+        if cat == "possible":   # only "looks alike" and nothing to double-check against: not shown
+            return None, ""
         return cat, note + " (our file was not found, so it could not be double-checked)"
     points = same_photo_score(theirs, cache[key], mirrored)
     if points is None:

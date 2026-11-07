@@ -45,6 +45,7 @@ rappler.com manilatimes.net thejakartapost.com malaymail.com thestar.com.my nzhe
 smh.com.au theage.com.au news.com.au skynews.com.au theglobeandmail.com nationalpost.com ctvnews.ca
 globalnews.ca torontosun.com punchng.com vanguardngr.com premiumtimesng.com allafrica.com news24.com
 iol.co.za businessday.ng nation.africa standardmedia.co.ke ghanaweb.com myjoyonline.com
+shafaqna.com presstv.ir tehrantimes.com
 """.split())
 
 
