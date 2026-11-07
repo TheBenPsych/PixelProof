@@ -436,25 +436,33 @@ class App:
                     return
                 st = Store(self.data_dir)
                 st._clip_index, st._hash_index = main._clip_index, main._hash_index
+                counted = {"pages": 0, "matches": 0, "ids": 0}
+
+                def tally(r):  # adds this site's progress to the totals as each page finishes
+                    with lock:
+                        res = job.result
+                        res["pages"] += r.checked - counted["pages"]
+                        res["matches"] += r.matches - counted["matches"]
+                        res["new_ids"] += r.new_ids[counted["ids"]:]
+                        counted.update(pages=r.checked, matches=r.matches, ids=len(r.new_ids))
+                        job.found = len(res["new_ids"])
+
                 try:
                     r = crawl_site(domain, st, shared, self.data_dir, pages_per_site=pages_per_site,
                                    log=job.log, should_stop=lambda: job.stop, seen_images=seen,
-                                   base_url=self.base_urls.get(domain), delay=self.crawl_delay)
+                                   base_url=self.base_urls.get(domain), delay=self.crawl_delay,
+                                   on_page=lambda i, n, r: tally(r))
                 except Exception as e:  # one broken site never stops the run
                     from .crawl import SiteResult
 
                     r = SiteResult(domain, "error", f"{type(e).__name__}: {e}"[:200])
                 save_site(st, r)
                 st.db.close()
+                tally(r)
                 with lock:
                     job.done += 1
-                    res = job.result
-                    res["sites"] += 1
-                    res["pages"] += r.checked
-                    res["matches"] += r.matches
-                    res["skipped"] += r.status == "skipped"
-                    res["new_ids"] += r.new_ids
-                    job.found = len(res["new_ids"])
+                    job.result["sites"] += 1
+                    job.result["skipped"] += r.status == "skipped"
                 if r.status == "error":
                     job.log(f"{domain}: {r.note}")
                 elif r.status == "done":

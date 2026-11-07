@@ -581,7 +581,7 @@ function openImport() {
 }
 
 /* ---------- jobs (checking a page, fingerprinting) ---------- */
-var jobTimer = null, lastJobState = null;
+var jobTimer = null, lastJobState = null, detailsOpen = false;
 function startCheck(targets) {
   api("/api/check", {targets: targets}).then(function (r) { if (r.ok === false) return toast(r.error); pollJob(); });
 }
@@ -613,7 +613,9 @@ function renderJob(j) {
     if (j.kind === "index" && j.total) kids.push(el("div", {"class": "line", text: j.done.toLocaleString() + " of " + j.total.toLocaleString() + " new images (" + pct + "%)"}));
   }
   kids.push(el("div", {"class": "line", text: last}));
-  kids.push(el("details", {}, [el("summary", {text: "Details"}), el("pre", {text: j.lines.join("\n")})]));
+  var det = el("details", {open: detailsOpen ? true : null}, [el("summary", {text: "Details"}), el("pre", {text: j.lines.join("\n")})]);
+  det.addEventListener("toggle", function () { detailsOpen = det.open; });
+  kids.push(det);
   var acts = el("div", {"class": "acts"});
   if (running) acts.appendChild(el("button", {"class": "btn small", type: "button", text: "Stop", onclick: function () { api("/api/stop", {}); toast("Stopping…"); }}));
   var res = j.result || {};
@@ -634,6 +636,7 @@ function renderJob(j) {
   }
   if (acts.childNodes.length) kids.push(acts);
   kids.forEach(function (k) { if (k) box.appendChild(k); });
+  var pre = det.querySelector("pre"); if (pre) pre.scrollTop = pre.scrollHeight;  /* newest lines in view */
 }
 
 /* ---------- main render ---------- */
