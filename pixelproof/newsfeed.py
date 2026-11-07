@@ -20,7 +20,8 @@ from datetime import datetime, timedelta, timezone
 
 from . import config
 from .fingerprint import open_image, thumbnail_jpeg
-from .matcher import match_images
+from .matcher import match_images, match_prepared
+from .prep import Prepared, prepare_many
 from .page import domain_of, is_banned, load_banned, session
 from .sites import is_unlikely
 
@@ -102,12 +103,12 @@ def _download(sess, url):
     try:
         with sess.get(url, timeout=(5, 12), stream=True) as r:
             r.raise_for_status()
-            data = b""
+            data = bytearray()
             for chunk in r.iter_content(65536):
                 data += chunk
                 if len(data) > config.MAX_WEB_IMAGE_BYTES:
                     return None
-            return data
+            return bytes(data)
     except Exception:
         return None
 
@@ -129,6 +130,7 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
         log(f"{res['skipped_lists']} of the {len(stamps)} news lists were already checked before, skipping them.")
     banned = load_banned(f"{data_dir}/banned.txt")
     seen_pages = set()
+    fast = getattr(clip, "fast", False)
     for si, stamp in enumerate(todo, 1):
         if should_stop():
             break
@@ -149,6 +151,9 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
             data = _download(sess, it[2])
             if not data:
                 return None
+            if fast:   # the picture work itself runs on every processor core at once (see prep.py)
+                p = prepare_many([data], config.MIN_WEB_IMAGE_SIDE)[0]
+                return (it, data, p) if isinstance(p, Prepared) else None
             try:
                 img, (w, h) = open_image(data)
             except Exception:
@@ -170,7 +175,13 @@ def scan(store, clip, data_dir, hours=3, us_only=True, log=print, should_stop=la
                 res["pictures"] += len(got)
                 n_pics += len(got)
                 t0 = time.time()
-                found = match_images([x[2] for x in got], store, clip) if got else []
+                if not got:
+                    found = []
+                elif fast:
+                    found = match_prepared([x[2] for x in got], store, clip,
+                                           lambda i, g=got: open_image(g[i][1])[0])
+                else:
+                    found = match_images([x[2] for x in got], store, clip)
                 t_cmp += time.time() - t0
                 for (it, data, _), matches in zip(got, found):
                     if not matches:

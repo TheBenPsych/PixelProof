@@ -433,11 +433,20 @@ class App:
             main.load_indexes(clip.dim)
             if str(getattr(clip, "device", "")).startswith("cuda") and main.search_on_card(clip.device):
                 job.log("Searching your library on the graphics card.")
+            if getattr(clip, "fast", False):
+                from .prep import helpers
+
+                job.log(f"Preparing pictures and reading pages on {helpers()} processor cores at once.")
             lock = threading.Lock()
 
             class SharedClip:  # one AI model on the graphics card, used by one site at a time
                 dim, name, device = clip.dim, clip.name, getattr(clip, "device", "")
                 preprocess = staticmethod(clip.preprocess)
+                fast = getattr(clip, "fast", False)
+
+                def embed_pixels(self, arrs):   # pictures already prepared by the helpers (prep.py)
+                    with lock:
+                        return clip.embed_pixels(arrs)
 
                 def embed(self, images):
                     # Preparing the pictures (resizing etc.) runs at the same time for every site; only the
@@ -626,6 +635,10 @@ class App:
             store.load_indexes(clip.dim)
             if str(getattr(clip, "device", "")).startswith("cuda") and store.search_on_card(clip.device):
                 job.log("Searching your library on the graphics card.")
+            if getattr(clip, "fast", False):
+                from .prep import helpers
+
+                job.log(f"Preparing pictures and reading pages on {helpers()} processor cores at once.")
             watch = set(_read_sites(self.data_dir / WATCH_FILE))
 
             from .sites import is_unlikely

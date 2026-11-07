@@ -111,6 +111,42 @@ class Clip:
         self.preprocess = preprocess
         self.dim = int(model.visual.output_dim)
         self.name = f"{model_name}/{pretrained}"
+        self.fast = self._setup_fast()
+
+    def _setup_fast(self) -> bool:
+        """The quick way (pictures prepared by the helpers, see prep.py) is only used when it gives the same
+        numbers as the AI's own preparation. Checked once on a test picture."""
+        torch = self.torch
+        try:
+            from .prep import ai_pixels
+
+            norm = next(t for t in self.preprocess.transforms if type(t).__name__ == "Normalize")
+            self._mean = torch.tensor(norm.mean, dtype=torch.float32, device=self.device).view(1, 3, 1, 1)
+            self._std = torch.tensor(norm.std, dtype=torch.float32, device=self.device).view(1, 3, 1, 1)
+            rng = np.random.default_rng(1)
+            test = Image.fromarray((rng.random((300, 450, 3)) * 255).astype(np.uint8))
+            want = self.preprocess(test).unsqueeze(0).float()
+            got = self._pixels_to_batch([ai_pixels(test)]).float().cpu()
+            if self.half:   # compare at the precision that is actually used
+                want = want.half().float()
+            return bool(torch.allclose(got, want, atol=2e-2))
+        except Exception:
+            return False
+
+    def _pixels_to_batch(self, arrs):
+        torch = self.torch
+        x = torch.from_numpy(np.stack(arrs)).to(self.device).permute(0, 3, 1, 2).float()
+        x = (x / 255.0 - self._mean) / self._std
+        return x.half() if self.half else x
+
+    def embed_pixels(self, arrs: list) -> np.ndarray:
+        """Like embed(), for pictures the helpers already prepared (224x224 pixels)."""
+        torch = self.torch
+        batch = self._pixels_to_batch(arrs)
+        with torch.inference_mode():
+            feats = self.model.encode_image(batch).float()
+        feats = feats / feats.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        return feats.cpu().numpy().astype(np.float32)
 
     def device_label(self) -> str:
         if self.device == "cuda":

@@ -43,6 +43,9 @@ pick how many of the newest pages to check per site, and press **Start crawling*
 - Giant platforms like Google, YouTube or Facebook are skipped; use **Check one page** there.
 - Sites built entirely with JavaScript may show few pictures; that is a known limit for now.
 - You can stop any time and start again later.
+- The heavy work (reading each page and preparing each picture) runs on all your processor cores at once, and
+  your library is searched on the graphics card. Sites that block robots (error 401, 402 or 403) are left
+  alone; their articles still reach you through **Find new sites from the news**.
 - Sites where you marked a match as stolen go first (even if they are not on the watch list), then sites with
   earlier matches, then sites never crawled, then the ones crawled longest ago.
 

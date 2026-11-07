@@ -54,13 +54,34 @@ def match_images(images, store, clip, k: int = 5) -> list[list[Candidate]]:
         return []
     vecs = clip.embed(images)
     pairs = [phash_pair(im) for im in images]
+    return _match(vecs, pairs, lambda qi: images[qi], store, k)
+
+
+def match_prepared(preps, store, clip, image_of, k: int = 5) -> list[list[Candidate]]:
+    """Like match_images, for pictures the helpers prepared (see prep.py). image_of(i) opens picture i,
+    only needed for the rare double-check."""
+    if not preps:
+        return []
+    vecs = clip.embed_pixels([p.pixels for p in preps])
+    pairs = [(p.hash_normal, p.hash_mirror) for p in preps]
+    return _match(vecs, pairs, image_of, store, k)
+
+
+def _match(vecs, pairs, image_of, store, k):
     sims, clip_ids = store.search_clip(vecs, k)
-    _, hash_ids_n = store.search_hash([p[0] for p in pairs], k)
-    _, hash_ids_m = store.search_hash([p[1] for p in pairs], k)
+    hd_n, hash_ids_n = store.search_hash([p[0] for p in pairs], k)
+    hd_m, hash_ids_m = store.search_hash([p[1] for p in pairs], k)
 
     results, ours = [], {}
-    for qi in range(len(images)):
-        ids = {int(i) for i in np.concatenate([clip_ids[qi], hash_ids_n[qi], hash_ids_m[qi]]) if i >= 0}
+    near = config.POSSIBLE_MIN_CLIP - 0.02   # small margin: the library search is a little rounded on the card
+    for qi in range(len(pairs)):
+        # only look up library pictures that could be a hit (most web pictures have none, saving the lookup)
+        ids = {int(i) for i, s in zip(clip_ids[qi], sims[qi]) if i >= 0 and s >= near}
+        ids |= {int(i) for i, d in zip(np.concatenate([hash_ids_n[qi], hash_ids_m[qi]]),
+                                       np.concatenate([hd_n[qi], hd_m[qi]])) if i >= 0 and d <= config.EXACT_MAX_HASH_DIST}
+        if not ids:
+            results.append([])
+            continue
         rows = store.get_images(ids)
         found = []
         for image_id, row in rows.items():
@@ -73,7 +94,7 @@ def match_images(images, store, clip, k: int = 5) -> list[list[Candidate]]:
             cat, note = categorize(dist, sim, mirrored)
             # double-check unless the picture hash proved it AND the AI agrees it looks the same
             if cat and (dist > config.EXACT_MAX_HASH_DIST or sim < config.HASH_HIT_MIN_CLIP):
-                cat, note = double_check(images[qi], row, mirrored, cat, note, ours)
+                cat, note = double_check(image_of(qi), row, mirrored, cat, note, ours)
             if cat:
                 found.append(Candidate(image_id, sim, dist, mirrored, cat, note, row))
         found.sort(key=lambda c: (CATEGORY_ORDER[c.category], c.hash_dist, -c.clip_sim))

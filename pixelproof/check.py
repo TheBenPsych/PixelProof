@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 from . import config
 from .fingerprint import open_image, thumbnail_jpeg
-from .matcher import Query, match_images
+from .matcher import Query, match_images, match_prepared
 from .page import (domain_of, download_images, extract_image_urls, fetch_page, is_banned,
                    load_banned, session)
 from .sites import load_approvals, load_sisters, path_key
@@ -121,7 +121,12 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
             sources.append((final_url, direct, ""))
         else:
             page_html = html.encode("utf-8", "replace")
-            urls = extract_image_urls(html, final_url)
+            if getattr(clip, "fast", False):   # reading big pages is slow: done by a helper (prep.py)
+                from .prep import run
+
+                urls = run(extract_image_urls, html, final_url)
+            else:
+                urls = extract_image_urls(html, final_url)
             if seen_images is not None:
                 known = len(urls)
                 urls = [u for u in urls if u not in seen_images]
@@ -143,30 +148,61 @@ def check_target(target: str, store: Store, clip, data_dir, log=print, seen_imag
     t0 = time.time()
     images, queries = [], []
     raw: dict[str, bytes | str] = {}   # picture as downloaded (kept as evidence for matches)
+    usable = []
     for label, data, err in sources:
-        q = Query(source=label)
         if err or data is None:
-            q.error = err or "download failed"
             res.failed += 1
             continue
-        try:
-            img, (w, h) = open_image(data)
-        except Exception as e:
-            q.error = f"not a readable picture ({type(e).__name__})"
-            res.failed += 1
-            continue
-        q.width, q.height = w, h
-        if min(w, h) < config.MIN_WEB_IMAGE_SIDE:
-            res.skipped_small += 1
-            continue
-        raw[label] = data
-        images.append(img)
-        queries.append(q)
+        usable.append((label, data))
+    fast = getattr(clip, "fast", False) and all(isinstance(d, (bytes, bytearray)) for _, d in usable)
+    if fast:
+        # the heavy picture work runs on every processor core at once (see prep.py)
+        from .prep import prepare_many
 
-    log(f"Comparing {len(images)} pictures with your library ...")
-    for start in range(0, len(images), 32):
-        for q, matches in zip(queries[start:start + 32], match_images(images[start:start + 32], store, clip)):
-            q.matches = matches
+        preps = []
+        for (label, data), p in zip(usable, prepare_many([d for _, d in usable], config.MIN_WEB_IMAGE_SIDE)):
+            if p == "small":
+                res.skipped_small += 1
+            elif isinstance(p, str):
+                res.failed += 1
+            else:
+                raw[label] = data
+                preps.append(p)
+                queries.append(Query(source=label, width=p.width, height=p.height))
+        opened: dict[int, object] = {}
+
+        def image_of(i):   # the full picture is only opened again for a double-check or a match
+            if i not in opened:
+                opened[i] = open_image(raw[queries[i].source])[0]
+            return opened[i]
+
+        log(f"Comparing {len(preps)} pictures with your library ...")
+        for start in range(0, len(preps), 32):
+            found = match_prepared(preps[start:start + 32], store, clip, lambda i, s=start: image_of(s + i))
+            for q, matches in zip(queries[start:start + 32], found):
+                q.matches = matches
+        images = [image_of(i) if q.matches else None for i, q in enumerate(queries)]
+    else:
+        for label, data in usable:
+            q = Query(source=label)
+            try:
+                img, (w, h) = open_image(data)
+            except Exception as e:
+                q.error = f"not a readable picture ({type(e).__name__})"
+                res.failed += 1
+                continue
+            q.width, q.height = w, h
+            if min(w, h) < config.MIN_WEB_IMAGE_SIDE:
+                res.skipped_small += 1
+                continue
+            raw[label] = data
+            images.append(img)
+            queries.append(q)
+
+        log(f"Comparing {len(images)} pictures with your library ...")
+        for start in range(0, len(images), 32):
+            for q, matches in zip(queries[start:start + 32], match_images(images[start:start + 32], store, clip)):
+                q.matches = matches
     for q, img in zip(queries, images):   # small preview only for pictures that matched (saves time)
         if q.matches:
             q.thumb = thumbnail_jpeg(img)

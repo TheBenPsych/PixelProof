@@ -1,3 +1,4 @@
+import io
 import functools
 import http.server
 import threading
@@ -36,6 +37,19 @@ class FakeClip:
 
     def embed(self, images):
         return self.embed_tensors([self.preprocess(i) for i in images])
+
+
+class FastFakeClip(FakeClip):
+    """Like FakeClip, but uses the quick way: pictures prepared by the helper programs (prep.py)."""
+    fast = True
+
+    def preprocess(self, img):
+        from pixelproof.prep import ai_pixels
+
+        return FakeClip.preprocess(self, Image.fromarray(ai_pixels(img)))
+
+    def embed_pixels(self, arrs):
+        return self.embed_tensors([FakeClip.preprocess(self, Image.fromarray(a)) for a in arrs])
 
 
 def make_photo(seed, size=(800, 600)):
@@ -114,10 +128,11 @@ def test_banned():
     assert not is_banned("https://notwtug.com/x", {"wtug.com"})
 
 
-def test_check_page_end_to_end(lib, tmp_path):
+@pytest.mark.parametrize("clip_kind", [FakeClip, FastFakeClip])
+def test_check_page_end_to_end(lib, tmp_path, clip_kind):
     root, files, data = lib
     store = Store(data)
-    clip = FakeClip()
+    clip = clip_kind()
     index_folder(str(root), store, clip, progress=False, log=lambda *a: None)
     store.load_indexes(clip.dim)
 
@@ -408,3 +423,39 @@ def test_search_on_card_gives_same_results(lib):
     assert store.search_on_card("cpu")
     s2, i2 = store.search_clip(q, 3)
     assert (i1 == i2).all() and np.allclose(s1, s2, atol=1e-4)
+
+
+def test_helper_preparation_matches_the_ai():
+    """The helpers' 224x224 pixels give the same numbers as the AI's own preparation."""
+    open_clip = pytest.importorskip("open_clip")
+    from pixelproof.prep import ai_pixels, prepare
+    import torch
+
+    t = open_clip.image_transform(224, is_train=False)
+    norm = t.transforms[-1]
+    for size in [(800, 600), (300, 900), (224, 224), (1000, 230)]:
+        img = make_photo(5, size)
+        want = t(img)
+        x = torch.from_numpy(ai_pixels(img)).permute(2, 0, 1).float() / 255.0
+        got = (x - torch.tensor(norm.mean).view(3, 1, 1)) / torch.tensor(norm.std).view(3, 1, 1)
+        assert torch.allclose(got, want, atol=1e-5), size
+    buf = io.BytesIO()
+    make_photo(5).save(buf, "JPEG")
+    p = prepare(buf.getvalue(), 100)
+    assert p.pixels.shape == (224, 224, 3) and (p.width, p.height) == (800, 600)
+    assert prepare(buf.getvalue(), 1000) == "small" and prepare(b"junk").startswith("not a readable")
+
+
+def test_real_model_uses_the_quick_way():
+    """The real AI wrapper switches on the quick way only after checking it gives the same numbers."""
+    open_clip = pytest.importorskip("open_clip")
+    import torch
+
+    from pixelproof.fingerprint import Clip
+
+    c = Clip.__new__(Clip)
+    c.torch, c.device, c.half = torch, "cpu", False
+    c.preprocess = open_clip.image_transform(224, is_train=False)
+    assert c._setup_fast()
+    c.preprocess = open_clip.image_transform(256, is_train=False)   # a different preparation: not used
+    assert not c._setup_fast()

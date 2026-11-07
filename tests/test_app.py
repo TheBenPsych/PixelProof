@@ -13,14 +13,15 @@ from pixelproof.app import App, make_handler
 from pixelproof.indexer import index_folder
 from pixelproof.store import Store
 
-from test_pixelproof import FakeClip, _serve, lib  # noqa: F401  (lib is a fixture)
+from test_pixelproof import FakeClip, FastFakeClip, _serve, lib  # noqa: F401  (lib is a fixture)
 
 
-@pytest.fixture
-def engine(lib, tmp_path):  # noqa: F811
+@pytest.fixture(params=[FakeClip, FastFakeClip], ids=["one-core", "all-cores"])
+def engine(lib, tmp_path, request):  # noqa: F811
     root, files, data = lib
     store = Store(data)
-    clip = FakeClip()
+    kind = request.param
+    clip = kind()
     index_folder(str(root), store, clip, progress=False, log=lambda *a: None)
     store.set_meta("clip_model", clip.name)
     store.commit()
@@ -34,7 +35,7 @@ def engine(lib, tmp_path):  # noqa: F811
     (art / "index.html").write_text("<img src='maya.jpg'><img src='luis.jpg'>")
     web = _serve(site)
 
-    a = App(data, clip_factory=lambda d: FakeClip())
+    a = App(data, clip_factory=lambda d: kind())
     http = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(a))
     threading.Thread(target=http.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{http.server_port}"
